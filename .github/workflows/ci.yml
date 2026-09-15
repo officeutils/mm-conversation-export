@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=mod
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
