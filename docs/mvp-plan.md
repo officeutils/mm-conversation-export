@@ -36,7 +36,7 @@ Use these supported public plugin interfaces:
 
 Relevant models and constants include `model.Command`, `model.CommandArgs`, `model.CommandResponse`, `model.Channel`, `model.ChannelMember`, `model.Post`, `model.PostList`, `model.FileInfo`, and `model.ChannelTypeDirect`.
 
-Verify exact signatures and HTTP authentication behavior against Mattermost 10.11.2 source during implementation. `GetDirectChannel` and `GetPostThread` are not used in the MVP export path.
+The exact signatures and behaviors are recorded in [the Mattermost 10.11.2 source audit](mattermost-10.11.2-api-contracts.md). `GetDirectChannel` and `GetPostThread` are not used in the MVP export path.
 
 ## Security flow
 
@@ -44,8 +44,8 @@ Verify exact signatures and HTTP authentication behavior against Mattermost 10.1
 2. Parse exactly one username with an optional leading `@`.
 3. Resolve the requester with `GetUser` and the target with `GetUserByUsername`.
 4. Reject identical requester and target IDs.
-5. Call `GetChannelsForTeamForUser("", requesterID, false)`.
-6. Consider only channels with `Type == model.ChannelTypeDirect`.
+5. Call `GetChannelsForTeamForUser("", requesterID, false)`; the empty team ID returns non-deleted DM and group-message channels for that user.
+6. Consider only channels with `Type == model.ChannelTypeDirect`; enumeration is not itself a DM-type or membership authorization check.
 7. Identify the existing channel containing the target.
 8. Independently require requester and target membership with `GetChannelMember`.
 9. Use `GetChannelMembers` if necessary to confirm only the expected two participants.
@@ -61,7 +61,7 @@ Define `100` as a named limit constant and call exactly:
 GetPostsForChannel(channelID, 0, 100)
 ```
 
-Do not paginate further. Mattermost excludes deleted posts by default, so do not request, recover, backfill, or reconstruct deleted content. Export every returned post; if fewer than 100 are available, export all of them. Sort chronologically by `(CreateAt, ID)`.
+Do not paginate further. This is the newest page, returned newest-first through `PostList.Order`; do not infer order by iterating the `Posts` map. Mattermost excludes deleted posts by default, so do not request, recover, backfill, or reconstruct deleted content. Export every returned post; if fewer than 100 are available, export all of them. Sort chronologically by `(CreateAt, ID)`.
 
 Thread replies are expected to be normal channel posts. Do not call `GetPostThread`. Maintain a Mattermost 10.11.2 regression/integration test proving that a reply appears in the channel result.
 
@@ -84,9 +84,9 @@ Store export bytes and token metadata in memory behind a small interface. Tokens
 
 For `ServeHTTP`:
 
-1. Obtain the Mattermost-authenticated identity from the server-supplied `Mattermost-User-Id`.
+1. Obtain the Mattermost-authenticated identity from the server-supplied `Mattermost-User-Id` and reject the request when it is absent. Mattermost strips a client-supplied value before setting the header from the authenticated session.
 2. Require a valid, unexpired token owned by that authenticated user.
-3. Serve HTML with safe content type, attachment disposition, and no-store caching headers.
+3. Serve HTML with safe content type, attachment disposition, and no-store caching headers; `ServeHTTP` has no return value, so write errors and status codes directly.
 4. Atomically invalidate the token and remove export data after successful download.
 5. Remove expired entries opportunistically without scheduled cleanup.
 
@@ -140,7 +140,7 @@ Each stage must remain independently reviewable and avoid unrelated changes.
 - Minimum Mattermost version is 10.11.2.
 - Exports contain at most the latest 100 non-deleted posts.
 - Thread inclusion is protected by a regression/integration test.
-- Mattermost HTTP identity-header behavior must be verified during implementation.
+- The HTTP identity header is trusted only on requests delivered through Mattermost's plugin router; the handler must not be independently mounted.
 - In-memory export/token storage supports single-node deployments only.
 - Self-DM export is disabled.
 - Exports are temporary and never persisted.
