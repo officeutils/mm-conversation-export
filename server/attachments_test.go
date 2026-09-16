@@ -91,12 +91,13 @@ func TestExecuteCommandGetsFileInfoWithoutAttachmentContents(t *testing.T) {
 		channelGetter: validChannelGetter(),
 		memberGetter:  validMemberGetter(),
 		postGetter:    posts,
+		exportStore:   validExportStore(),
 		fileGetter:    files,
 	}).ExecuteCommand(nil, &model.CommandArgs{Command: "/export-dm @other", UserId: "requester-id"})
 	if appErr != nil {
 		t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
 	}
-	if response.Text != "Preparing a direct-message export with @other." {
+	if response.Text != "[Download your direct-message export with @other](/plugins/com.github.officeutils.dm-export/download?token=test-token). This one-time link expires in 10 minutes." {
 		t.Fatalf("response text = %q", response.Text)
 	}
 	if !reflect.DeepEqual(files.calls, []string{"file-id"}) {

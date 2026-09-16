@@ -120,3 +120,23 @@ func validMemberGetter() *memberLookup {
 func validPostGetter() *recordingPostGetter {
 	return &recordingPostGetter{postList: model.NewPostList()}
 }
+
+type recordingExportStore struct {
+	ownerID  string
+	contents []byte
+	putErr   error
+}
+
+func (s *recordingExportStore) Put(ownerID string, contents []byte) (string, error) {
+	s.ownerID = ownerID
+	s.contents = append([]byte(nil), contents...)
+	if s.putErr != nil {
+		return "", s.putErr
+	}
+	return "test-token", nil
+}
+
+func (*recordingExportStore) Claim(string, string) ([]byte, error) { return nil, errExportNotFound }
+func (*recordingExportStore) Finish(string, string, bool)          {}
+
+func validExportStore() *recordingExportStore { return &recordingExportStore{} }
