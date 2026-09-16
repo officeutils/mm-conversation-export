@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -13,6 +14,7 @@ import (
 
 const (
 	commandTrigger = "export-dm"
+	pluginID       = "com.github.officeutils.dm-export"
 	postLimit      = 100
 )
 
@@ -55,6 +57,7 @@ type Plugin struct {
 	postGetter       channelPostGetter
 	fileGetter       fileInfoGetter
 	exportStore      temporaryExportStore
+	now              func() time.Time
 }
 
 // OnActivate registers the slash command exposed by the plugin.
@@ -202,13 +205,31 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		files = p.API
 	}
 
-	if _, appErr = collectAttachmentMetadata(files, sortedPosts); appErr != nil {
+	attachments, appErr := collectAttachmentMetadata(files, sortedPosts)
+	if appErr != nil {
 		return commandError("Unable to read attachment metadata for that direct-message conversation."), nil
 	}
 
+	exportedAt := time.Now()
+	if p.now != nil {
+		exportedAt = p.now()
+	}
+	contents, err := renderHTMLExport(requester, target, exportedAt, sortedPosts, attachments)
+	if err != nil {
+		return commandError("Unable to render that direct-message export."), nil
+	}
+	if p.exportStore == nil {
+		return commandError("Export delivery is temporarily unavailable."), nil
+	}
+	token, err := p.exportStore.Put(requester.Id, contents)
+	if err != nil {
+		return commandError("Unable to store that direct-message export. Please download any existing export or try again later."), nil
+	}
+
+	downloadURL := fmt.Sprintf("/plugins/%s/download?token=%s", pluginID, token)
 	return &model.CommandResponse{
 		ResponseType: "ephemeral",
-		Text:         fmt.Sprintf("Preparing a direct-message export with @%s.", username),
+		Text:         fmt.Sprintf("[Download your direct-message export with @%s](%s). This one-time link expires in 10 minutes.", username, downloadURL),
 	}, nil
 }
 

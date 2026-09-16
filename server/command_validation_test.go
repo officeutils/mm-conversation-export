@@ -13,15 +13,15 @@ func TestExecuteCommandAcceptsExactlyOneUsername(t *testing.T) {
 		command string
 		want    string
 	}{
-		{name: "plain username", command: "/export-dm other-user", want: "Preparing a direct-message export with @other-user."},
-		{name: "leading at sign", command: "/export-dm @other.user", want: "Preparing a direct-message export with @other.user."},
+		{name: "plain username", command: "/export-dm other-user", want: "[Download your direct-message export with @other-user](/plugins/com.github.officeutils.dm-export/download?token=test-token). This one-time link expires in 10 minutes."},
+		{name: "leading at sign", command: "/export-dm @other.user", want: "[Download your direct-message export with @other.user](/plugins/com.github.officeutils.dm-export/download?token=test-token). This one-time link expires in 10 minutes."},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			users := validUserGetter()
 			channels := validChannelGetter()
-			response, appErr := (&Plugin{userGetter: users, channelGetter: channels, memberGetter: validMemberGetter(), postGetter: validPostGetter()}).ExecuteCommand(nil, &model.CommandArgs{
+			response, appErr := (&Plugin{userGetter: users, channelGetter: channels, memberGetter: validMemberGetter(), postGetter: validPostGetter(), exportStore: validExportStore()}).ExecuteCommand(nil, &model.CommandArgs{
 				Command: tt.command,
 				UserId:  "requester-id",
 			})

@@ -16,14 +16,14 @@ func TestExecuteCommandFindsExistingDirectChannel(t *testing.T) {
 		{Id: "direct-channel-id", Name: model.GetDMNameFromIds("target-id", "requester-id"), Type: model.ChannelTypeDirect},
 	}}
 
-	response, appErr := (&Plugin{userGetter: validUserGetter(), channelGetter: channels, memberGetter: validMemberGetter(), postGetter: validPostGetter()}).ExecuteCommand(nil, &model.CommandArgs{
+	response, appErr := (&Plugin{userGetter: validUserGetter(), channelGetter: channels, memberGetter: validMemberGetter(), postGetter: validPostGetter(), exportStore: validExportStore()}).ExecuteCommand(nil, &model.CommandArgs{
 		Command: "/export-dm @other",
 		UserId:  "requester-id",
 	})
 	if appErr != nil {
 		t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
 	}
-	if response.Text != "Preparing a direct-message export with @other." {
+	if response.Text != "[Download your direct-message export with @other](/plugins/com.github.officeutils.dm-export/download?token=test-token). This one-time link expires in 10 minutes." {
 		t.Errorf("response text = %q", response.Text)
 	}
 }
@@ -36,11 +36,12 @@ func TestExecuteCommandVerifiesBothMembershipsAndParticipantSet(t *testing.T) {
 		channelGetter: validChannelGetter(),
 		memberGetter:  members,
 		postGetter:    validPostGetter(),
+		exportStore:   validExportStore(),
 	}).ExecuteCommand(nil, &model.CommandArgs{Command: "/export-dm @other", UserId: "requester-id"})
 	if appErr != nil {
 		t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
 	}
-	if response.Text != "Preparing a direct-message export with @other." {
+	if response.Text != "[Download your direct-message export with @other](/plugins/com.github.officeutils.dm-export/download?token=test-token). This one-time link expires in 10 minutes." {
 		t.Fatalf("response text = %q", response.Text)
 	}
 	if len(members.calls) != 2 || members.calls[0] != "requester-id" || members.calls[1] != "target-id" {
