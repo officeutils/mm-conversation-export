@@ -22,6 +22,23 @@ type recordingUserGetter struct {
 	requestedUsername string
 }
 
+type recordingChannelGetter struct {
+	channels       []*model.Channel
+	err            *model.AppError
+	teamID         string
+	userID         string
+	includeDeleted bool
+	calls          int
+}
+
+func (g *recordingChannelGetter) GetChannelsForTeamForUser(teamID, userID string, includeDeleted bool) ([]*model.Channel, *model.AppError) {
+	g.teamID = teamID
+	g.userID = userID
+	g.includeDeleted = includeDeleted
+	g.calls++
+	return g.channels, g.err
+}
+
 func (g *recordingUserGetter) GetUser(userID string) (*model.User, *model.AppError) {
 	g.requestedUserID = userID
 	return g.requester, g.requesterErr
@@ -37,6 +54,14 @@ func validUserGetter() *recordingUserGetter {
 		requester: &model.User{Id: "requester-id", Username: "requester"},
 		target:    &model.User{Id: "target-id", Username: "other"},
 	}
+}
+
+func validChannelGetter() *recordingChannelGetter {
+	return &recordingChannelGetter{channels: []*model.Channel{{
+		Id:   "direct-channel-id",
+		Name: model.GetDMNameFromIds("requester-id", "target-id"),
+		Type: model.ChannelTypeDirect,
+	}}}
 }
 
 func (r *recordingRegistrar) RegisterCommand(command *model.Command) error {
@@ -88,7 +113,8 @@ func TestExecuteCommandAcceptsExactlyOneUsername(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			users := validUserGetter()
-			response, appErr := (&Plugin{userGetter: users}).ExecuteCommand(nil, &model.CommandArgs{
+			channels := validChannelGetter()
+			response, appErr := (&Plugin{userGetter: users, channelGetter: channels}).ExecuteCommand(nil, &model.CommandArgs{
 				Command: tt.command,
 				UserId:  "requester-id",
 			})
@@ -106,6 +132,9 @@ func TestExecuteCommandAcceptsExactlyOneUsername(t *testing.T) {
 			}
 			if users.requestedUsername != strings.TrimPrefix(strings.Fields(tt.command)[1], "@") {
 				t.Errorf("GetUserByUsername called with %q", users.requestedUsername)
+			}
+			if channels.calls != 1 || channels.teamID != "" || channels.userID != "requester-id" || channels.includeDeleted {
+				t.Errorf("GetChannelsForTeamForUser calls = %d, args = (%q, %q, %t), want 1 call with (\"\", \"requester-id\", false)", channels.calls, channels.teamID, channels.userID, channels.includeDeleted)
 			}
 		})
 	}
@@ -129,7 +158,7 @@ func TestExecuteCommandRejectsInvalidRequests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response, appErr := (&Plugin{userGetter: validUserGetter()}).ExecuteCommand(nil, tt.args)
+			response, appErr := (&Plugin{userGetter: validUserGetter(), channelGetter: validChannelGetter()}).ExecuteCommand(nil, tt.args)
 			if appErr != nil {
 				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
 			}
@@ -180,7 +209,7 @@ func TestExecuteCommandHandlesUserLookupFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response, appErr := (&Plugin{userGetter: tt.users}).ExecuteCommand(nil, &model.CommandArgs{
+			response, appErr := (&Plugin{userGetter: tt.users, channelGetter: validChannelGetter()}).ExecuteCommand(nil, &model.CommandArgs{
 				Command: "/export-dm @other",
 				UserId:  "requester-id",
 			})
@@ -198,7 +227,7 @@ func TestExecuteCommandRejectsRequesterAsTarget(t *testing.T) {
 	users := validUserGetter()
 	users.target.Id = users.requester.Id
 
-	response, appErr := (&Plugin{userGetter: users}).ExecuteCommand(nil, &model.CommandArgs{
+	response, appErr := (&Plugin{userGetter: users, channelGetter: validChannelGetter()}).ExecuteCommand(nil, &model.CommandArgs{
 		Command: "/export-dm @requester",
 		UserId:  "requester-id",
 	})
@@ -207,5 +236,69 @@ func TestExecuteCommandRejectsRequesterAsTarget(t *testing.T) {
 	}
 	if response.Text != "You cannot export a direct-message conversation with yourself." {
 		t.Errorf("unexpected response text: %q", response.Text)
+	}
+}
+
+func TestExecuteCommandFindsExistingDirectChannel(t *testing.T) {
+	channels := &recordingChannelGetter{channels: []*model.Channel{
+		nil,
+		{Id: "public", Name: model.GetDMNameFromIds("requester-id", "target-id"), Type: model.ChannelTypeOpen},
+		{Id: "group", Name: model.GetDMNameFromIds("requester-id", "target-id"), Type: model.ChannelTypeGroup},
+		{Id: "different-dm", Name: model.GetDMNameFromIds("requester-id", "someone-else"), Type: model.ChannelTypeDirect},
+		{Id: "matching-dm", Name: model.GetDMNameFromIds("target-id", "requester-id"), Type: model.ChannelTypeDirect},
+	}}
+
+	response, appErr := (&Plugin{userGetter: validUserGetter(), channelGetter: channels}).ExecuteCommand(nil, &model.CommandArgs{
+		Command: "/export-dm @other",
+		UserId:  "requester-id",
+	})
+	if appErr != nil {
+		t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
+	}
+	if response.Text != "Preparing a direct-message export with @other." {
+		t.Errorf("response text = %q", response.Text)
+	}
+}
+
+func TestExecuteCommandHandlesChannelLookupFailures(t *testing.T) {
+	lookupError := model.NewAppError("test", "lookup failed", nil, "", 500)
+	tests := []struct {
+		name     string
+		channels *recordingChannelGetter
+		want     string
+	}{
+		{
+			name:     "enumeration error",
+			channels: &recordingChannelGetter{err: lookupError},
+			want:     "Unable to inspect your direct-message conversations.",
+		},
+		{
+			name:     "no channels",
+			channels: &recordingChannelGetter{},
+			want:     "No direct-message conversation with @other exists.",
+		},
+		{
+			name: "only group channel",
+			channels: &recordingChannelGetter{channels: []*model.Channel{{
+				Name: model.GetDMNameFromIds("requester-id", "target-id"),
+				Type: model.ChannelTypeGroup,
+			}}},
+			want: "No direct-message conversation with @other exists.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response, appErr := (&Plugin{userGetter: validUserGetter(), channelGetter: tt.channels}).ExecuteCommand(nil, &model.CommandArgs{
+				Command: "/export-dm @other",
+				UserId:  "requester-id",
+			})
+			if appErr != nil {
+				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
+			}
+			if response.Text != tt.want {
+				t.Errorf("response text = %q, want %q", response.Text, tt.want)
+			}
+		})
 	}
 }
