@@ -96,7 +96,7 @@ func validMemberGetter() *memberLookup {
 			"target-id":    target,
 		},
 		memberErrors: map[string]*model.AppError{},
-		allMembers:   model.ChannelMembers{requester, target},
+		allMembers:   model.ChannelMembers{*requester, *target},
 	}
 }
 
@@ -338,11 +338,11 @@ func TestExecuteCommandRejectsUnauthorizedDirectChannels(t *testing.T) {
 		{name: "participant enumeration error", mutate: func(g *memberLookup) { g.allErr = lookupError }, wantCalls: []string{"requester-id", "target-id"}},
 		{name: "participant missing", mutate: func(g *memberLookup) { g.allMembers = g.allMembers[:1] }, wantCalls: []string{"requester-id", "target-id"}},
 		{name: "unexpected third participant", mutate: func(g *memberLookup) {
-			g.allMembers = append(g.allMembers, &model.ChannelMember{ChannelId: "direct-channel-id", UserId: "intruder-id"})
+			g.allMembers = append(g.allMembers, model.ChannelMember{ChannelId: "direct-channel-id", UserId: "intruder-id"})
 		}, wantCalls: []string{"requester-id", "target-id"}},
 		{name: "duplicate participant", mutate: func(g *memberLookup) { g.allMembers[1] = g.allMembers[0] }, wantCalls: []string{"requester-id", "target-id"}},
 		{name: "participant from another channel", mutate: func(g *memberLookup) {
-			g.allMembers[1] = &model.ChannelMember{ChannelId: "other-channel", UserId: "target-id"}
+			g.allMembers[1] = model.ChannelMember{ChannelId: "other-channel", UserId: "target-id"}
 		}, wantCalls: []string{"requester-id", "target-id"}},
 	}
 

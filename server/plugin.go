@@ -137,7 +137,7 @@ func authorizeDirectChannel(members channelMemberGetter, channelID, requesterID,
 
 	seen := map[string]bool{}
 	for _, member := range channelMembers {
-		if member == nil || member.ChannelId != channelID ||
+		if member.ChannelId != channelID ||
 			(member.UserId != requesterID && member.UserId != targetID) || seen[member.UserId] {
 			return false
 		}
