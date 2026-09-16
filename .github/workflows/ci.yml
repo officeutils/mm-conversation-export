@@ -24,11 +24,19 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Vet
-        run: go vet ./...
-
       - name: Test
-        run: go test ./...
+        run: make test
 
       - name: Build
-        run: go build -o "$RUNNER_TEMP/mm-dm-export/" ./...
+        run: make build
+
+      - name: Package
+        if: github.event_name == 'push'
+        run: make package
+
+      - name: Upload package
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: com.github.officeutils.dm-export
+          path: dist/com.github.officeutils.dm-export-0.1.0.tar.gz
