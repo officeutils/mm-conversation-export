@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -53,10 +54,15 @@ type Plugin struct {
 	memberGetter     channelMemberGetter
 	postGetter       channelPostGetter
 	fileGetter       fileInfoGetter
+	exportStore      temporaryExportStore
 }
 
 // OnActivate registers the slash command exposed by the plugin.
 func (p *Plugin) OnActivate() error {
+	if p.exportStore == nil {
+		p.exportStore = newDefaultMemoryExportStore()
+	}
+
 	registrar := p.commandRegistrar
 	if registrar == nil {
 		registrar = p.API
@@ -68,6 +74,62 @@ func (p *Plugin) OnActivate() error {
 		AutoCompleteDesc: "Export a direct-message conversation",
 		AutoCompleteHint: "@username",
 	})
+}
+
+// ServeHTTP delivers requester-bound exports through Mattermost's authenticated
+// plugin route. Mattermost removes any client-provided Mattermost-User-Id header
+// and supplies it from the authenticated session before invoking this hook.
+func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Request) {
+	setDownloadResponseHeaders(w.Header())
+
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.URL.Path != "/download" {
+		http.NotFound(w, r)
+		return
+	}
+
+	requesterID := r.Header.Get("Mattermost-User-Id")
+	if requesterID == "" {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	tokens, present := r.URL.Query()["token"]
+	if !present || len(tokens) != 1 || tokens[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if p.exportStore == nil {
+		http.Error(w, "export delivery unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	token := tokens[0]
+	contents, err := p.exportStore.Claim(requesterID, token)
+	if err != nil {
+		// Ownership failures, expired tokens, invalid tokens, and replays are
+		// intentionally indistinguishable to callers.
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="direct-messages.html"`)
+	w.WriteHeader(http.StatusOK)
+	written, writeErr := w.Write(contents)
+	p.exportStore.Finish(requesterID, token, writeErr == nil && written == len(contents))
+}
+
+func setDownloadResponseHeaders(header http.Header) {
+	header.Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	header.Set("Pragma", "no-cache")
+	header.Set("Expires", "0")
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Content-Security-Policy", "sandbox; default-src 'none'")
 }
 
 // ExecuteCommand validates an export request and locates its existing direct
