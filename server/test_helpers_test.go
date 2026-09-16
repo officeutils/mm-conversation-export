@@ -40,6 +40,17 @@ type recordingPostGetter struct {
 	calls     int
 }
 
+type recordingFileInfoGetter struct {
+	infos map[string]*model.FileInfo
+	errs  map[string]*model.AppError
+	calls []string
+}
+
+func (g *recordingFileInfoGetter) GetFileInfo(fileID string) (*model.FileInfo, *model.AppError) {
+	g.calls = append(g.calls, fileID)
+	return g.infos[fileID], g.errs[fileID]
+}
+
 func (g *recordingPostGetter) GetPostsForChannel(channelID string, page, perPage int) (*model.PostList, *model.AppError) {
 	g.channelID = channelID
 	g.page = page

@@ -39,6 +39,10 @@ type channelPostGetter interface {
 	GetPostsForChannel(channelID string, page, perPage int) (*model.PostList, *model.AppError)
 }
 
+type fileInfoGetter interface {
+	GetFileInfo(fileID string) (*model.FileInfo, *model.AppError)
+}
+
 // Plugin is the server-side DM export plugin.
 type Plugin struct {
 	plugin.MattermostPlugin
@@ -48,6 +52,7 @@ type Plugin struct {
 	channelGetter    channelGetter
 	memberGetter     channelMemberGetter
 	postGetter       channelPostGetter
+	fileGetter       fileInfoGetter
 }
 
 // OnActivate registers the slash command exposed by the plugin.
@@ -125,8 +130,18 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		posts = p.API
 	}
 
-	if _, appErr = getSortedChannelPosts(posts, directChannel.Id); appErr != nil {
+	sortedPosts, appErr := getSortedChannelPosts(posts, directChannel.Id)
+	if appErr != nil {
 		return commandError("Unable to read that direct-message conversation."), nil
+	}
+
+	files := p.fileGetter
+	if files == nil {
+		files = p.API
+	}
+
+	if _, appErr = collectAttachmentMetadata(files, sortedPosts); appErr != nil {
+		return commandError("Unable to read attachment metadata for that direct-message conversation."), nil
 	}
 
 	return &model.CommandResponse{
