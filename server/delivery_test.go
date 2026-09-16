@@ -3,10 +3,121 @@ package main
 import (
 	"bytes"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestServeHTTPRequiresAuthenticatedOwnerAndPreservesToken(t *testing.T) {
+	store := newMemoryExportStore(time.Minute, 1, 1)
+	token, err := store.Put("owner", []byte("private export"))
+	if err != nil {
+		t.Fatalf("Put returned an error: %v", err)
+	}
+	plugin := &Plugin{exportStore: store}
+
+	for _, test := range []struct {
+		name   string
+		userID string
+		status int
+	}{
+		{name: "anonymous", status: http.StatusUnauthorized},
+		{name: "different owner", userID: "intruder", status: http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/download?token="+token, nil)
+			request.Header.Set("Mattermost-User-Id", test.userID)
+			response := httptest.NewRecorder()
+
+			plugin.ServeHTTP(nil, response, request)
+
+			if response.Code != test.status {
+				t.Errorf("status = %d, want %d", response.Code, test.status)
+			}
+		})
+	}
+
+	if _, err := store.Consume("owner", token); err != nil {
+		t.Fatalf("failed requests consumed the owner's token: %v", err)
+	}
+}
+
+func TestServeHTTPSetsSafeDownloadHeadersAndPreventsReplay(t *testing.T) {
+	store := newMemoryExportStore(time.Minute, 1, 1)
+	token, err := store.Put("owner", []byte("<!doctype html><title>Export</title>"))
+	if err != nil {
+		t.Fatalf("Put returned an error: %v", err)
+	}
+	plugin := &Plugin{exportStore: store}
+
+	request := httptest.NewRequest(http.MethodGet, "/download?token="+token, nil)
+	request.Header.Set("Mattermost-User-Id", "owner")
+	response := httptest.NewRecorder()
+	plugin.ServeHTTP(nil, response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Body.String(); got != "<!doctype html><title>Export</title>" {
+		t.Errorf("body = %q, want stored export", got)
+	}
+	wantHeaders := map[string]string{
+		"Content-Type":            "text/html; charset=utf-8",
+		"Content-Disposition":     `attachment; filename="direct-messages.html"`,
+		"Cache-Control":           "no-store, no-cache, must-revalidate",
+		"Pragma":                  "no-cache",
+		"Expires":                 "0",
+		"X-Content-Type-Options":  "nosniff",
+		"Content-Security-Policy": "sandbox; default-src 'none'",
+	}
+	for name, want := range wantHeaders {
+		if got := response.Header().Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+
+	replay := httptest.NewRecorder()
+	plugin.ServeHTTP(nil, replay, request)
+	if replay.Code != http.StatusNotFound {
+		t.Errorf("replay status = %d, want %d", replay.Code, http.StatusNotFound)
+	}
+}
+
+func TestServeHTTPRejectsExpiredAndMalformedRequests(t *testing.T) {
+	store := newMemoryExportStore(time.Minute, 2, 1)
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	token, err := store.Put("owner", []byte("expired"))
+	if err != nil {
+		t.Fatalf("Put returned an error: %v", err)
+	}
+	now = now.Add(time.Minute)
+	plugin := &Plugin{exportStore: store}
+
+	for _, target := range []string{
+		"/download?token=" + token,
+		"/download",
+		"/download?token=one&token=two",
+		"/other?token=" + token,
+	} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Mattermost-User-Id", "owner")
+		response := httptest.NewRecorder()
+		plugin.ServeHTTP(nil, response, request)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("GET %s status = %d, want %d", target, response.Code, http.StatusNotFound)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/download?token="+token, nil)
+	response := httptest.NewRecorder()
+	plugin.ServeHTTP(nil, response, request)
+	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodGet {
+		t.Errorf("POST status/Allow = %d/%q, want %d/%q", response.Code, response.Header().Get("Allow"), http.StatusMethodNotAllowed, http.MethodGet)
+	}
+}
 
 func TestMemoryExportStoreCreatesRandomOwnerBoundTokens(t *testing.T) {
 	store := newMemoryExportStore(time.Minute, 4, 2)
