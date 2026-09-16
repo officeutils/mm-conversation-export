@@ -41,11 +41,10 @@ jobs:
           test "${#packages[@]}" -eq 1
           test "${packages[0]}" = "$expected"
 
-      - name: Create GitHub Release
+      - name: Upload package to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release upload "$GITHUB_REF_NAME" \
             "dist/mm-dm-export-${VERSION}.tar.gz" \
-            --generate-notes \
-            --title "$GITHUB_REF_NAME"
+            --clobber
