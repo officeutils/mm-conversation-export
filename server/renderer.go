@@ -3,60 +3,77 @@ package main
 import (
 	"bytes"
 	"html/template"
+	"sort"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 )
 
 type exportTemplateData struct {
-	Participants []string
-	ExportedAt   string
-	Notice       string
-	Messages     []exportMessage
+	Title   string
+	Threads []exportThread
+}
+
+type exportThread struct {
+	Root        *exportMessage
+	Replies     []exportMessage
+	MissingRoot bool
+	createAt    int64
+	sortID      string
 }
 
 type exportMessage struct {
-	ID          string
-	Timestamp   string
-	Author      string
-	Text        string
-	RootID      string
-	Attachments []AttachmentMetadata
+	TimestampISO string
+	Timestamp    string
+	Author       string
+	Text         string
+	Attachments  []string
+	createAt     int64
+	id           string
 }
 
 var exportHTMLTemplate = template.Must(template.New("dm-export").Parse(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Direct-message export</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    body { margin: 0; background: #f5f6f8; color: #202124; font: 16px/1.5 system-ui, sans-serif; }
+    main { max-width: 54rem; margin: 0 auto; padding: 2rem 1rem; }
+    h1 { font-size: 1.5rem; overflow-wrap: anywhere; }
+    .threads, .replies { margin: 0; padding: 0; list-style: none; }
+    .thread { margin: 1rem 0; padding: 1rem; border: 1px solid #d9dde3; border-radius: .5rem; background: white; }
+    .message header { margin-bottom: .5rem; }
+    .message time { color: #5f6368; font-size: .875rem; }
+    .message-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+    .replies { margin: 1rem 0 0 1.5rem; padding-left: 1rem; border-left: 3px solid #d9dde3; }
+    .reply + .reply { margin-top: 1rem; }
+    .missing-root { margin: 0 0 1rem; color: #5f6368; font-style: italic; }
+    .attachments { overflow-wrap: anywhere; }
+  </style>
 </head>
 <body>
   <main>
-    <h1>Direct-message export</h1>
-    <p><strong>Participants:</strong> {{range $index, $participant := .Participants}}{{if $index}}, {{end}}{{$participant}}{{end}}</p>
-    <p><strong>Exported:</strong> <time datetime="{{.ExportedAt}}">{{.ExportedAt}}</time></p>
-    <p><strong>Scope:</strong> {{.Notice}}</p>
-    <ol>
-      {{range .Messages}}<li data-post-id="{{.ID}}">
-        <article>
-          <header><time datetime="{{.Timestamp}}">{{.Timestamp}}</time> — <strong>{{.Author}}</strong></header>
-          {{if .RootID}}<p>Reply to post <code>{{.RootID}}</code></p>{{else}}<p>Root post</p>{{end}}
-          <pre>{{.Text}}</pre>
-          {{if .Attachments}}<h2>Attachments</h2>
-          <ul>{{range .Attachments}}
-            <li><strong>{{.Filename}}</strong> — {{.Size}} bytes; MIME type: <code>{{.MIMEType}}</code>; file ID: <code>{{.ID}}</code></li>{{end}}
-          </ul>{{end}}
-        </article>
+    <h1>{{.Title}}</h1>
+    <ol class="threads">
+      {{range .Threads}}<li class="thread">
+        {{if .MissingRoot}}<p class="missing-root">Earlier message is not included in this export</p>{{else}}{{with .Root}}{{template "message" .}}{{end}}{{end}}
+        {{if .Replies}}<ol class="replies">{{range .Replies}}<li class="reply">{{template "message" .}}</li>{{end}}</ol>{{end}}
       </li>{{end}}
     </ol>
   </main>
 </body>
 </html>
-`))
+{{define "message"}}<article class="message">
+  <header><strong>{{.Author}}</strong> · <time datetime="{{.TimestampISO}}">{{.Timestamp}}</time></header>
+  <pre class="message-text">{{.Text}}</pre>
+  {{if .Attachments}}<ul class="attachments">{{range .Attachments}}<li>{{.}}</li>{{end}}</ul>{{end}}
+</article>{{end}}`))
 
 // renderHTMLExport renders a complete, standalone HTML document. html/template
 // supplies context-aware escaping for participant, post, and attachment data.
-func renderHTMLExport(requester, target *model.User, exportedAt time.Time, posts []*model.Post, attachmentsByPost map[string][]AttachmentMetadata) ([]byte, error) {
+func renderHTMLExport(requester, target *model.User, _ time.Time, posts []*model.Post, attachmentsByPost map[string][]AttachmentMetadata) ([]byte, error) {
 	authors := map[string]string{}
 	participants := make([]string, 0, 2)
 	for _, user := range []*model.User{requester, target} {
@@ -67,31 +84,76 @@ func renderHTMLExport(requester, target *model.User, exportedAt time.Time, posts
 		}
 	}
 
-	messages := make([]exportMessage, 0, len(posts))
-	for _, post := range posts {
-		if post == nil {
-			continue
-		}
-
+	messageFor := func(post *model.Post) exportMessage {
 		author := authors[post.UserId]
 		if author == "" {
 			author = post.UserId
 		}
-		messages = append(messages, exportMessage{
-			ID:          post.Id,
-			Timestamp:   formatExportTime(post.CreateAt),
-			Author:      author,
-			Text:        post.Message,
-			RootID:      post.RootId,
-			Attachments: attachmentsByPost[post.Id],
-		})
+		attachments := make([]string, 0, len(attachmentsByPost[post.Id]))
+		for _, attachment := range attachmentsByPost[post.Id] {
+			attachments = append(attachments, attachment.Filename)
+		}
+		return exportMessage{
+			TimestampISO: time.UnixMilli(post.CreateAt).UTC().Format(time.RFC3339Nano),
+			Timestamp:    formatExportTime(post.CreateAt),
+			Author:       author,
+			Text:         post.Message,
+			Attachments:  attachments,
+			createAt:     post.CreateAt,
+			id:           post.Id,
+		}
 	}
 
+	threadsByRoot := make(map[string]*exportThread)
+	rootOrder := make([]string, 0, len(posts))
+	for _, post := range posts {
+		if post == nil || post.RootId != "" {
+			continue
+		}
+		message := messageFor(post)
+		threadsByRoot[post.Id] = &exportThread{Root: &message, createAt: post.CreateAt, sortID: post.Id}
+		rootOrder = append(rootOrder, post.Id)
+	}
+
+	orphanOrder := make([]string, 0)
+	for _, post := range posts {
+		if post == nil || post.RootId == "" {
+			continue
+		}
+		thread := threadsByRoot[post.RootId]
+		if thread == nil {
+			thread = &exportThread{MissingRoot: true, createAt: post.CreateAt, sortID: post.RootId}
+			threadsByRoot[post.RootId] = thread
+			orphanOrder = append(orphanOrder, post.RootId)
+		} else if thread.MissingRoot && post.CreateAt < thread.createAt {
+			// A truncated thread is positioned by its earliest included reply,
+			// regardless of the order returned by the API.
+			thread.createAt = post.CreateAt
+		}
+		thread.Replies = append(thread.Replies, messageFor(post))
+	}
+
+	threads := make([]exportThread, 0, len(rootOrder)+len(orphanOrder))
+	for _, rootID := range append(rootOrder, orphanOrder...) {
+		thread := threadsByRoot[rootID]
+		sort.Slice(thread.Replies, func(i, j int) bool {
+			if thread.Replies[i].createAt == thread.Replies[j].createAt {
+				return thread.Replies[i].id < thread.Replies[j].id
+			}
+			return thread.Replies[i].createAt < thread.Replies[j].createAt
+		})
+		threads = append(threads, *thread)
+	}
+	sort.Slice(threads, func(i, j int) bool {
+		if threads[i].createAt == threads[j].createAt {
+			return threads[i].sortID < threads[j].sortID
+		}
+		return threads[i].createAt < threads[j].createAt
+	})
+
 	data := exportTemplateData{
-		Participants: participants,
-		ExportedAt:   exportedAt.UTC().Format(time.RFC3339),
-		Notice:       "At most the latest 100 non-deleted messages are included.",
-		Messages:     messages,
+		Title:   "Direct messages: " + participants[0] + " and " + participants[1],
+		Threads: threads,
 	}
 
 	var output bytes.Buffer
@@ -112,5 +174,5 @@ func exportUserName(user *model.User) string {
 }
 
 func formatExportTime(milliseconds int64) string {
-	return time.UnixMilli(milliseconds).UTC().Format(time.RFC3339Nano)
+	return time.UnixMilli(milliseconds).UTC().Format("January 2, 2006 at 15:04:05 UTC")
 }
