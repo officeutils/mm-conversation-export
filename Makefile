@@ -1,6 +1,6 @@
 PLUGIN_ID := com.github.officeutils.dm-export
-VERSION := 0.1.0
-PACKAGE := dist/$(PLUGIN_ID)-$(VERSION).tar.gz
+PACKAGE_NAME := mm-dm-export
+PACKAGE = dist/$(PACKAGE_NAME)-$(VERSION).tar.gz
 
 BINARIES := \
 	server/dist/plugin-linux-amd64 \
@@ -41,12 +41,18 @@ server/dist/plugin-windows-amd64.exe:
 	@mkdir -p $(@D)
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o $@ ./server
 
-package: build
-	@rm -rf build/bundle
-	@mkdir -p build/bundle/server/dist dist
-	cp plugin.json build/bundle/plugin.json
-	cp $(BINARIES) build/bundle/server/dist/
-	tar -C build/bundle -czf $(PACKAGE) plugin.json server
+package:
+	@test -n "$(VERSION)" || { echo "VERSION is required (for example: make package VERSION=0.1.0)" >&2; exit 1; }
+	@$(MAKE) build
+	@set -eu; \
+		mkdir -p build; \
+		staging_dir=$$(mktemp -d build/package.XXXXXX); \
+		trap 'rm -rf "$$staging_dir"' EXIT; \
+		mkdir -p "$$staging_dir/server/dist" dist; \
+		jq --arg version "$(VERSION)" '.version = $$version' plugin.json > "$$staging_dir/plugin.json"; \
+		cp $(BINARIES) "$$staging_dir/server/dist/"; \
+		rm -f dist/$(PACKAGE_NAME)-*.tar.gz; \
+		tar -C "$$staging_dir" -czf "$(PACKAGE)" plugin.json server
 	@printf 'Created %s\n' '$(PACKAGE)'
 
 clean:

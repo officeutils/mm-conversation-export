@@ -32,11 +32,11 @@ jobs:
 
       - name: Package
         if: github.event_name == 'push'
-        run: make package
+        run: make package VERSION=0.0.0-dev
 
       - name: Upload package
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: com.github.officeutils.dm-export
-          path: dist/com.github.officeutils.dm-export-0.1.0.tar.gz
+          path: dist/mm-dm-export-0.0.0-dev.tar.gz

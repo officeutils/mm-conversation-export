@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate tag and derive version
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Package plugin
+        run: make package VERSION="$VERSION"
+
+      - name: Verify release package
+        run: |
+          expected="dist/mm-dm-export-${VERSION}.tar.gz"
+          test -f "$expected"
+          mapfile -t packages < <(find dist -maxdepth 1 -type f -name 'mm-dm-export-*.tar.gz')
+          test "${#packages[@]}" -eq 1
+          test "${packages[0]}" = "$expected"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/mm-dm-export-${VERSION}.tar.gz" \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"
