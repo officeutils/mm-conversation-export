@@ -22,12 +22,17 @@ type userGetter interface {
 	GetUserByUsername(username string) (*model.User, *model.AppError)
 }
 
+type channelGetter interface {
+	GetChannelsForTeamForUser(teamID, userID string, includeDeleted bool) ([]*model.Channel, *model.AppError)
+}
+
 // Plugin is the server-side DM export plugin.
 type Plugin struct {
 	plugin.MattermostPlugin
 
 	commandRegistrar commandRegistrar
 	userGetter       userGetter
+	channelGetter    channelGetter
 }
 
 // OnActivate registers the slash command exposed by the plugin.
@@ -45,8 +50,8 @@ func (p *Plugin) OnActivate() error {
 	})
 }
 
-// ExecuteCommand validates an export request before any conversation data is
-// looked up. Mattermost supplies UserId from the authenticated command request.
+// ExecuteCommand validates an export request and locates its existing direct
+// channel. Mattermost supplies UserId from the authenticated command request.
 func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
 	if args == nil || args.UserId == "" {
 		return commandError("Unable to export direct messages without an authenticated requester."), nil
@@ -76,10 +81,36 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		return commandError("You cannot export a direct-message conversation with yourself."), nil
 	}
 
+	channels := p.channelGetter
+	if channels == nil {
+		channels = p.API
+	}
+
+	requesterChannels, appErr := channels.GetChannelsForTeamForUser("", requester.Id, false)
+	if appErr != nil {
+		return commandError("Unable to inspect your direct-message conversations."), nil
+	}
+
+	directChannel := findDirectChannel(requesterChannels, requester.Id, target.Id)
+	if directChannel == nil {
+		return commandError(fmt.Sprintf("No direct-message conversation with @%s exists.", username)), nil
+	}
+
 	return &model.CommandResponse{
 		ResponseType: "ephemeral",
 		Text:         fmt.Sprintf("Preparing a direct-message export with @%s.", username),
 	}, nil
+}
+
+func findDirectChannel(channels []*model.Channel, requesterID, targetID string) *model.Channel {
+	directChannelName := model.GetDMNameFromIds(requesterID, targetID)
+	for _, channel := range channels {
+		if channel != nil && channel.Type == model.ChannelTypeDirect && channel.Name == directChannelName {
+			return channel
+		}
+	}
+
+	return nil
 }
 
 func parseCommandUsername(command string) (string, error) {
