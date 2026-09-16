@@ -17,11 +17,17 @@ type commandRegistrar interface {
 	RegisterCommand(command *model.Command) error
 }
 
+type userGetter interface {
+	GetUser(userID string) (*model.User, *model.AppError)
+	GetUserByUsername(username string) (*model.User, *model.AppError)
+}
+
 // Plugin is the server-side DM export plugin.
 type Plugin struct {
 	plugin.MattermostPlugin
 
 	commandRegistrar commandRegistrar
+	userGetter       userGetter
 }
 
 // OnActivate registers the slash command exposed by the plugin.
@@ -49,6 +55,25 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 	username, err := parseCommandUsername(args.Command)
 	if err != nil {
 		return commandError("Usage: /export-dm @username"), nil
+	}
+
+	users := p.userGetter
+	if users == nil {
+		users = p.API
+	}
+
+	requester, appErr := users.GetUser(args.UserId)
+	if appErr != nil || requester == nil {
+		return commandError("Unable to resolve the authenticated requester."), nil
+	}
+
+	target, appErr := users.GetUserByUsername(username)
+	if appErr != nil || target == nil {
+		return commandError(fmt.Sprintf("Unable to find user @%s.", username)), nil
+	}
+
+	if requester.Id == target.Id {
+		return commandError("You cannot export a direct-message conversation with yourself."), nil
 	}
 
 	return &model.CommandResponse{

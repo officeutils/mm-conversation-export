@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -10,6 +11,32 @@ import (
 type recordingRegistrar struct {
 	command *model.Command
 	err     error
+}
+
+type recordingUserGetter struct {
+	requester         *model.User
+	requesterErr      *model.AppError
+	target            *model.User
+	targetErr         *model.AppError
+	requestedUserID   string
+	requestedUsername string
+}
+
+func (g *recordingUserGetter) GetUser(userID string) (*model.User, *model.AppError) {
+	g.requestedUserID = userID
+	return g.requester, g.requesterErr
+}
+
+func (g *recordingUserGetter) GetUserByUsername(username string) (*model.User, *model.AppError) {
+	g.requestedUsername = username
+	return g.target, g.targetErr
+}
+
+func validUserGetter() *recordingUserGetter {
+	return &recordingUserGetter{
+		requester: &model.User{Id: "requester-id", Username: "requester"},
+		target:    &model.User{Id: "target-id", Username: "other"},
+	}
 }
 
 func (r *recordingRegistrar) RegisterCommand(command *model.Command) error {
@@ -60,7 +87,8 @@ func TestExecuteCommandAcceptsExactlyOneUsername(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response, appErr := (&Plugin{}).ExecuteCommand(nil, &model.CommandArgs{
+			users := validUserGetter()
+			response, appErr := (&Plugin{userGetter: users}).ExecuteCommand(nil, &model.CommandArgs{
 				Command: tt.command,
 				UserId:  "requester-id",
 			})
@@ -72,6 +100,12 @@ func TestExecuteCommandAcceptsExactlyOneUsername(t *testing.T) {
 			}
 			if response.Text != tt.want {
 				t.Errorf("response text = %q, want %q", response.Text, tt.want)
+			}
+			if users.requestedUserID != "requester-id" {
+				t.Errorf("GetUser called with %q, want requester-id", users.requestedUserID)
+			}
+			if users.requestedUsername != strings.TrimPrefix(strings.Fields(tt.command)[1], "@") {
+				t.Errorf("GetUserByUsername called with %q", users.requestedUsername)
 			}
 		})
 	}
@@ -95,7 +129,7 @@ func TestExecuteCommandRejectsInvalidRequests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response, appErr := (&Plugin{}).ExecuteCommand(nil, tt.args)
+			response, appErr := (&Plugin{userGetter: validUserGetter()}).ExecuteCommand(nil, tt.args)
 			if appErr != nil {
 				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
 			}
@@ -109,5 +143,69 @@ func TestExecuteCommandRejectsInvalidRequests(t *testing.T) {
 				t.Error("response did not explain the rejection")
 			}
 		})
+	}
+}
+
+func TestExecuteCommandHandlesUserLookupFailures(t *testing.T) {
+	lookupError := model.NewAppError("test", "lookup failed", nil, "", 500)
+	tests := []struct {
+		name  string
+		users *recordingUserGetter
+		want  string
+	}{
+		{
+			name:  "requester lookup error",
+			users: &recordingUserGetter{requesterErr: lookupError},
+			want:  "Unable to resolve the authenticated requester.",
+		},
+		{
+			name:  "nil requester",
+			users: &recordingUserGetter{},
+			want:  "Unable to resolve the authenticated requester.",
+		},
+		{
+			name: "target lookup error",
+			users: &recordingUserGetter{
+				requester: &model.User{Id: "requester-id"},
+				targetErr: lookupError,
+			},
+			want: "Unable to find user @other.",
+		},
+		{
+			name:  "nil target",
+			users: &recordingUserGetter{requester: &model.User{Id: "requester-id"}},
+			want:  "Unable to find user @other.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response, appErr := (&Plugin{userGetter: tt.users}).ExecuteCommand(nil, &model.CommandArgs{
+				Command: "/export-dm @other",
+				UserId:  "requester-id",
+			})
+			if appErr != nil {
+				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
+			}
+			if response.Text != tt.want {
+				t.Errorf("response text = %q, want %q", response.Text, tt.want)
+			}
+		})
+	}
+}
+
+func TestExecuteCommandRejectsRequesterAsTarget(t *testing.T) {
+	users := validUserGetter()
+	users.target.Id = users.requester.Id
+
+	response, appErr := (&Plugin{userGetter: users}).ExecuteCommand(nil, &model.CommandArgs{
+		Command: "/export-dm @requester",
+		UserId:  "requester-id",
+	})
+	if appErr != nil {
+		t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
+	}
+	if response.Text != "You cannot export a direct-message conversation with yourself." {
+		t.Errorf("unexpected response text: %q", response.Text)
 	}
 }
