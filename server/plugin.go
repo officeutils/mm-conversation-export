@@ -3,13 +3,17 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 )
 
-const commandTrigger = "export-dm"
+const (
+	commandTrigger = "export-dm"
+	postLimit      = 100
+)
 
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
@@ -31,6 +35,10 @@ type channelMemberGetter interface {
 	GetChannelMembers(channelID string, page, perPage int) (model.ChannelMembers, *model.AppError)
 }
 
+type channelPostGetter interface {
+	GetPostsForChannel(channelID string, page, perPage int) (*model.PostList, *model.AppError)
+}
+
 // Plugin is the server-side DM export plugin.
 type Plugin struct {
 	plugin.MattermostPlugin
@@ -39,6 +47,7 @@ type Plugin struct {
 	userGetter       userGetter
 	channelGetter    channelGetter
 	memberGetter     channelMemberGetter
+	postGetter       channelPostGetter
 }
 
 // OnActivate registers the slash command exposed by the plugin.
@@ -111,10 +120,45 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		return commandError("Unable to authorize that direct-message conversation."), nil
 	}
 
+	posts := p.postGetter
+	if posts == nil {
+		posts = p.API
+	}
+
+	if _, appErr = getSortedChannelPosts(posts, directChannel.Id); appErr != nil {
+		return commandError("Unable to read that direct-message conversation."), nil
+	}
+
 	return &model.CommandResponse{
 		ResponseType: "ephemeral",
 		Text:         fmt.Sprintf("Preparing a direct-message export with @%s.", username),
 	}, nil
+}
+
+func getSortedChannelPosts(posts channelPostGetter, channelID string) ([]*model.Post, *model.AppError) {
+	postList, appErr := posts.GetPostsForChannel(channelID, 0, postLimit)
+	if appErr != nil {
+		return nil, appErr
+	}
+	if postList == nil {
+		return nil, model.NewAppError("getSortedChannelPosts", "received an empty post list", nil, "", 500)
+	}
+
+	sortedPosts := make([]*model.Post, 0, len(postList.Order))
+	for _, postID := range postList.Order {
+		if post := postList.Posts[postID]; post != nil {
+			sortedPosts = append(sortedPosts, post)
+		}
+	}
+
+	sort.Slice(sortedPosts, func(i, j int) bool {
+		if sortedPosts[i].CreateAt != sortedPosts[j].CreateAt {
+			return sortedPosts[i].CreateAt < sortedPosts[j].CreateAt
+		}
+		return sortedPosts[i].Id < sortedPosts[j].Id
+	})
+
+	return sortedPosts, nil
 }
 
 func authorizeDirectChannel(members channelMemberGetter, channelID, requesterID, targetID string) bool {
