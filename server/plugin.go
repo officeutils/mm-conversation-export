@@ -26,6 +26,11 @@ type channelGetter interface {
 	GetChannelsForTeamForUser(teamID, userID string, includeDeleted bool) ([]*model.Channel, *model.AppError)
 }
 
+type channelMemberGetter interface {
+	GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError)
+	GetChannelMembers(channelID string, page, perPage int) (model.ChannelMembers, *model.AppError)
+}
+
 // Plugin is the server-side DM export plugin.
 type Plugin struct {
 	plugin.MattermostPlugin
@@ -33,6 +38,7 @@ type Plugin struct {
 	commandRegistrar commandRegistrar
 	userGetter       userGetter
 	channelGetter    channelGetter
+	memberGetter     channelMemberGetter
 }
 
 // OnActivate registers the slash command exposed by the plugin.
@@ -96,10 +102,53 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		return commandError(fmt.Sprintf("No direct-message conversation with @%s exists.", username)), nil
 	}
 
+	members := p.memberGetter
+	if members == nil {
+		members = p.API
+	}
+
+	if !authorizeDirectChannel(members, directChannel.Id, requester.Id, target.Id) {
+		return commandError("Unable to authorize that direct-message conversation."), nil
+	}
+
 	return &model.CommandResponse{
 		ResponseType: "ephemeral",
 		Text:         fmt.Sprintf("Preparing a direct-message export with @%s.", username),
 	}, nil
+}
+
+func authorizeDirectChannel(members channelMemberGetter, channelID, requesterID, targetID string) bool {
+	requesterMember, appErr := members.GetChannelMember(channelID, requesterID)
+	if appErr != nil || !isExpectedMember(requesterMember, channelID, requesterID) {
+		return false
+	}
+
+	targetMember, appErr := members.GetChannelMember(channelID, targetID)
+	if appErr != nil || !isExpectedMember(targetMember, channelID, targetID) {
+		return false
+	}
+
+	// Fetch at most three members: a third result is enough to reject a channel
+	// that is not the expected two-person conversation.
+	channelMembers, appErr := members.GetChannelMembers(channelID, 0, 3)
+	if appErr != nil || len(channelMembers) != 2 {
+		return false
+	}
+
+	seen := map[string]bool{}
+	for _, member := range channelMembers {
+		if member == nil || member.ChannelId != channelID ||
+			(member.UserId != requesterID && member.UserId != targetID) || seen[member.UserId] {
+			return false
+		}
+		seen[member.UserId] = true
+	}
+
+	return seen[requesterID] && seen[targetID]
+}
+
+func isExpectedMember(member *model.ChannelMember, channelID, userID string) bool {
+	return member != nil && member.ChannelId == channelID && member.UserId == userID
 }
 
 func findDirectChannel(channels []*model.Channel, requesterID, targetID string) *model.Channel {
