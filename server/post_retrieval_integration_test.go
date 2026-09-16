@@ -7,10 +7,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/blang/semver/v4"
 	"github.com/mattermost/mattermost/server/public/model"
 )
 
-const mattermostRegressionVersion = "10.11.2"
+var minimumMattermostRegressionVersion = semver.MustParse("10.11.2")
 
 // TestMattermost10112BoundedChannelPostsIncludeThreadReply protects the
 // server behavior on which getSortedChannelPosts relies. In Mattermost
@@ -84,8 +85,12 @@ func loginIntegrationUser(t *testing.T, ctx context.Context, serverURL, username
 	if err != nil {
 		t.Fatalf("log in %q: %v", username, err)
 	}
-	if response.ServerVersion != mattermostRegressionVersion {
-		t.Fatalf("Mattermost version = %q, test requires %s", response.ServerVersion, mattermostRegressionVersion)
+	serverVersion, err := semver.ParseTolerant(response.ServerVersion)
+	if err != nil {
+		t.Fatalf("parse Mattermost version %q: %v", response.ServerVersion, err)
+	}
+	if serverVersion.LT(minimumMattermostRegressionVersion) {
+		t.Fatalf("Mattermost version = %q, test requires >= %s", response.ServerVersion, minimumMattermostRegressionVersion)
 	}
 	return client, user
 }
@@ -95,7 +100,7 @@ func integrationEnv(t *testing.T, name string) string {
 
 	value := os.Getenv(name)
 	if value == "" {
-		t.Skipf("set %s to run the Mattermost %s integration test", name, mattermostRegressionVersion)
+		t.Skipf("set %s to run the Mattermost >= %s integration test", name, minimumMattermostRegressionVersion)
 	}
 	return value
 }

@@ -2,11 +2,13 @@ module github.com/officeutils/mm-dm-export
 
 go 1.23.0
 
-require github.com/mattermost/mattermost/server/public v0.1.6
+require (
+	github.com/blang/semver/v4 v4.0.0
+	github.com/mattermost/mattermost/server/public v0.1.6
+)
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/dyatlov/go-opengraph/opengraph v0.0.0-20220524092352-606d7b1e5f8a // indirect
 	github.com/fatih/color v1.17.0 // indirect
 	github.com/francoispqt/gojay v1.2.13 // indirect
