@@ -108,7 +108,8 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	contents, err := p.exportStore.Consume(requesterID, tokens[0])
+	token := tokens[0]
+	contents, err := p.exportStore.Claim(requesterID, token)
 	if err != nil {
 		// Ownership failures, expired tokens, invalid tokens, and replays are
 		// intentionally indistinguishable to callers.
@@ -119,7 +120,8 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="direct-messages.html"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(contents)
+	written, writeErr := w.Write(contents)
+	p.exportStore.Finish(requesterID, token, writeErr == nil && written == len(contents))
 }
 
 func setDownloadResponseHeaders(header http.Header) {

@@ -39,9 +39,10 @@ func TestServeHTTPRequiresAuthenticatedOwnerAndPreservesToken(t *testing.T) {
 		})
 	}
 
-	if _, err := store.Consume("owner", token); err != nil {
+	if _, err := store.Claim("owner", token); err != nil {
 		t.Fatalf("failed requests consumed the owner's token: %v", err)
 	}
+	store.Finish("owner", token, true)
 }
 
 func TestServeHTTPSetsSafeDownloadHeadersAndPreventsReplay(t *testing.T) {
@@ -82,6 +83,25 @@ func TestServeHTTPSetsSafeDownloadHeadersAndPreventsReplay(t *testing.T) {
 	plugin.ServeHTTP(nil, replay, request)
 	if replay.Code != http.StatusNotFound {
 		t.Errorf("replay status = %d, want %d", replay.Code, http.StatusNotFound)
+	}
+}
+
+func TestServeHTTPPreservesTokenWhenResponseWriteFails(t *testing.T) {
+	store := newMemoryExportStore(time.Minute, 1, 1)
+	token, err := store.Put("owner", []byte("private export"))
+	if err != nil {
+		t.Fatalf("Put returned an error: %v", err)
+	}
+	plugin := &Plugin{exportStore: store}
+	request := httptest.NewRequest(http.MethodGet, "/download?token="+token, nil)
+	request.Header.Set("Mattermost-User-Id", "owner")
+
+	plugin.ServeHTTP(nil, &failingResponseWriter{header: make(http.Header)}, request)
+
+	retry := httptest.NewRecorder()
+	plugin.ServeHTTP(nil, retry, request)
+	if retry.Code != http.StatusOK || retry.Body.String() != "private export" {
+		t.Errorf("retry status/body = %d/%q, want %d/%q", retry.Code, retry.Body.String(), http.StatusOK, "private export")
 	}
 }
 
@@ -134,16 +154,17 @@ func TestMemoryExportStoreCreatesRandomOwnerBoundTokens(t *testing.T) {
 	}
 
 	contents[0] = 'X'
-	if _, err := store.Consume("owner-two", token); !errors.Is(err, errExportNotFound) {
-		t.Fatalf("Consume by another owner returned %v, want errExportNotFound", err)
+	if _, err := store.Claim("owner-two", token); !errors.Is(err, errExportNotFound) {
+		t.Fatalf("Claim by another owner returned %v, want errExportNotFound", err)
 	}
-	got, err := store.Consume("owner-one", token)
+	got, err := store.Claim("owner-one", token)
 	if err != nil {
 		t.Fatalf("Consume by owner returned an error: %v", err)
 	}
 	if string(got) != "private export" {
 		t.Errorf("consumed contents = %q, want an isolated copy", got)
 	}
+	store.Finish("owner-one", token, true)
 }
 
 func TestMemoryExportStoreEnforcesConfiguredLimits(t *testing.T) {
@@ -172,8 +193,8 @@ func TestMemoryExportStoreRemovesExpiredEntries(t *testing.T) {
 		t.Fatalf("Put returned an error: %v", err)
 	}
 	now = now.Add(time.Minute)
-	if _, err := store.Consume("owner", token); !errors.Is(err, errExportNotFound) {
-		t.Errorf("Consume at expiry returned %v, want errExportNotFound", err)
+	if _, err := store.Claim("owner", token); !errors.Is(err, errExportNotFound) {
+		t.Errorf("Claim at expiry returned %v, want errExportNotFound", err)
 	}
 	if _, err := store.Put("replacement", []byte("current")); err != nil {
 		t.Fatalf("expired entry continued to consume capacity: %v", err)
@@ -196,9 +217,12 @@ func TestMemoryExportStoreConsumesAtomically(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			contents, consumeErr := store.Consume("owner", token)
+			contents, consumeErr := store.Claim("owner", token)
 			if consumeErr == nil && !bytes.Equal(contents, []byte("one use")) {
 				consumeErr = errors.New("unexpected contents")
+			}
+			if consumeErr == nil {
+				store.Finish("owner", token, true)
 			}
 			results <- consumeErr
 		}()
@@ -229,6 +253,18 @@ func TestMemoryExportStorePropagatesRandomSourceFailure(t *testing.T) {
 }
 
 type errorReader struct{}
+
+type failingResponseWriter struct {
+	header http.Header
+}
+
+func (w *failingResponseWriter) Header() http.Header { return w.header }
+
+func (w *failingResponseWriter) WriteHeader(int) {}
+
+func (w *failingResponseWriter) Write(contents []byte) (int, error) {
+	return len(contents) / 2, errors.New("client disconnected")
+}
 
 func (errorReader) Read([]byte) (int, error) {
 	return 0, errors.New("random source failed")

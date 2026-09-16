@@ -23,17 +23,19 @@ var (
 )
 
 // temporaryExportStore is the narrow interface used by the command and HTTP
-// delivery paths. Consume combines authorization and deletion so a successful
-// token can be used only once, even by concurrent callers.
+// delivery paths. Claim reserves an export for one response writer, and Finish
+// either consumes it after a complete write or makes it available for retry.
 type temporaryExportStore interface {
 	Put(ownerID string, contents []byte) (string, error)
-	Consume(ownerID, token string) ([]byte, error)
+	Claim(ownerID, token string) ([]byte, error)
+	Finish(ownerID, token string, delivered bool)
 }
 
 type storedExport struct {
 	ownerID  string
 	contents []byte
 	expires  time.Time
+	claimed  bool
 }
 
 // memoryExportStore keeps short-lived exports in one plugin process. All
@@ -106,19 +108,40 @@ func (s *memoryExportStore) Put(ownerID string, contents []byte) (string, error)
 	}
 }
 
-func (s *memoryExportStore) Consume(ownerID, token string) ([]byte, error) {
+func (s *memoryExportStore) Claim(ownerID, token string) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := s.now()
 	s.removeExpired(now)
 	entry, exists := s.entries[token]
-	if !exists || entry.ownerID != ownerID {
+	if !exists || entry.ownerID != ownerID || entry.claimed {
 		return nil, errExportNotFound
 	}
 
-	delete(s.entries, token)
+	entry.claimed = true
+	s.entries[token] = entry
 	return append([]byte(nil), entry.contents...), nil
+}
+
+// Finish concludes a claim. Successful delivery permanently consumes the
+// export; failed delivery releases it for another attempt while its original
+// expiry remains valid.
+func (s *memoryExportStore) Finish(ownerID, token string, delivered bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, exists := s.entries[token]
+	if !exists || entry.ownerID != ownerID || !entry.claimed {
+		return
+	}
+	if delivered || !s.now().Before(entry.expires) {
+		delete(s.entries, token)
+		return
+	}
+
+	entry.claimed = false
+	s.entries[token] = entry
 }
 
 // removeExpired is called with mu held. An entry expires exactly at its
