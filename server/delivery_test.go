@@ -119,6 +119,7 @@ func TestServeHTTPRejectsExpiredAndMalformedRequests(t *testing.T) {
 	for _, target := range []string{
 		"/download?token=" + token,
 		"/download",
+		"/download?token=",
 		"/download?token=one&token=two",
 		"/other?token=" + token,
 	} {
@@ -136,6 +137,56 @@ func TestServeHTTPRejectsExpiredAndMalformedRequests(t *testing.T) {
 	plugin.ServeHTTP(nil, response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodGet {
 		t.Errorf("POST status/Allow = %d/%q, want %d/%q", response.Code, response.Header().Get("Allow"), http.StatusMethodNotAllowed, http.MethodGet)
+	}
+}
+
+func TestServeHTTPRejectsTokenMismatchWithoutConsumingExport(t *testing.T) {
+	store := newMemoryExportStore(time.Minute, 1, 1)
+	token, err := store.Put("owner", []byte("private export"))
+	if err != nil {
+		t.Fatalf("Put returned an error: %v", err)
+	}
+	plugin := &Plugin{exportStore: store}
+
+	request := httptest.NewRequest(http.MethodGet, "/download?token="+token+"-wrong", nil)
+	request.Header.Set("Mattermost-User-Id", "owner")
+	response := httptest.NewRecorder()
+	plugin.ServeHTTP(nil, response, request)
+	if response.Code != http.StatusNotFound {
+		t.Errorf("mismatched token status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+
+	contents, err := store.Claim("owner", token)
+	if err != nil {
+		t.Fatalf("token mismatch consumed the valid export: %v", err)
+	}
+	if string(contents) != "private export" {
+		t.Errorf("claimed contents = %q, want %q", contents, "private export")
+	}
+	store.Finish("owner", token, true)
+}
+
+func TestMemoryExportStoreRejectsConcurrentClaimAndAllowsRetryAfterFailure(t *testing.T) {
+	store := newMemoryExportStore(time.Minute, 1, 1)
+	token, err := store.Put("owner", []byte("private export"))
+	if err != nil {
+		t.Fatalf("Put returned an error: %v", err)
+	}
+
+	if _, err := store.Claim("owner", token); err != nil {
+		t.Fatalf("first Claim returned an error: %v", err)
+	}
+	if _, err := store.Claim("owner", token); !errors.Is(err, errExportNotFound) {
+		t.Fatalf("concurrent Claim returned %v, want errExportNotFound", err)
+	}
+
+	store.Finish("owner", token, false)
+	if _, err := store.Claim("owner", token); err != nil {
+		t.Fatalf("Claim after failed delivery returned an error: %v", err)
+	}
+	store.Finish("owner", token, true)
+	if _, err := store.Claim("owner", token); !errors.Is(err, errExportNotFound) {
+		t.Fatalf("replay Claim returned %v, want errExportNotFound", err)
 	}
 }
 
