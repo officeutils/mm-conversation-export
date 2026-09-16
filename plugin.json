@@ -2,7 +2,7 @@
   "id": "com.github.officeutils.dm-export",
   "name": "DM Export",
   "description": "Self-service export of a user's own direct messages.",
-  "version": "0.1.0",
+  "version": "0.0.0-dev",
   "min_server_version": "10.11.2",
   "server": {
     "executables": {
