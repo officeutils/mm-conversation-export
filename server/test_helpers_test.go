@@ -33,11 +33,14 @@ type memberLookup struct {
 
 type recordingPostGetter struct {
 	postList  *model.PostList
+	postLists []*model.PostList
 	err       *model.AppError
 	channelID string
 	page      int
 	perPage   int
 	calls     int
+	pages     []int
+	perPages  []int
 }
 
 type recordingFileInfoGetter struct {
@@ -56,6 +59,11 @@ func (g *recordingPostGetter) GetPostsForChannel(channelID string, page, perPage
 	g.page = page
 	g.perPage = perPage
 	g.calls++
+	g.pages = append(g.pages, page)
+	g.perPages = append(g.perPages, perPage)
+	if len(g.postLists) > page {
+		return g.postLists[page], g.err
+	}
 	return g.postList, g.err
 }
 
@@ -123,12 +131,14 @@ func validPostGetter() *recordingPostGetter {
 
 type recordingExportStore struct {
 	ownerID  string
+	filename string
 	contents []byte
 	putErr   error
 }
 
-func (s *recordingExportStore) Put(ownerID string, contents []byte) (string, error) {
+func (s *recordingExportStore) Put(ownerID, filename string, contents []byte) (string, error) {
 	s.ownerID = ownerID
+	s.filename = filename
 	s.contents = append([]byte(nil), contents...)
 	if s.putErr != nil {
 		return "", s.putErr
@@ -136,7 +146,9 @@ func (s *recordingExportStore) Put(ownerID string, contents []byte) (string, err
 	return "test-token", nil
 }
 
-func (*recordingExportStore) Claim(string, string) ([]byte, error) { return nil, errExportNotFound }
-func (*recordingExportStore) Finish(string, string, bool)          {}
+func (*recordingExportStore) Claim(string, string) (storedExport, error) {
+	return storedExport{}, errExportNotFound
+}
+func (*recordingExportStore) Finish(string, string, bool) {}
 
 func validExportStore() *recordingExportStore { return &recordingExportStore{} }

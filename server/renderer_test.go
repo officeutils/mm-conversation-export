@@ -14,6 +14,7 @@ func renderTestExport(t *testing.T, posts []*model.Post, attachments map[string]
 		&model.User{Id: "master-id", Username: "master"},
 		&model.User{Id: "tester-id", Username: "tester"},
 		time.Date(2026, time.September, 16, 12, 34, 56, 0, time.UTC),
+		defaultMaxExportPosts,
 		posts,
 		attachments,
 	)
@@ -110,7 +111,7 @@ func TestRenderHTMLExportOmitsInternalMetadataAndOnlyShowsAttachmentName(t *test
 	}
 	for _, forbidden := range []string{
 		"post-secret-123", "root-secret-456", "file-secret-789", "987654", "application/secret",
-		"Root post", "Reply to post", "Exported", "Scope", "data-post-id", "RootId", "MIME type",
+		"Root post", "Reply to post", "Scope", "data-post-id", "RootId", "MIME type",
 	} {
 		if strings.Contains(html, forbidden) {
 			t.Errorf("rendered HTML contains internal value %q", forbidden)
@@ -124,6 +125,7 @@ func TestRenderHTMLExportEscapesAllUserControlledFields(t *testing.T) {
 		&model.User{Id: "master-id", Username: attack},
 		&model.User{Id: "tester-id", Username: `target&friend`},
 		time.Unix(0, 0),
+		defaultMaxExportPosts,
 		[]*model.Post{{Id: "post", UserId: "master-id", CreateAt: 1_000, Message: attack + "\nsecond line"}},
 		map[string][]AttachmentMetadata{"post": {{Filename: attack}}},
 	)
@@ -152,6 +154,7 @@ func TestRenderHTMLExportHasFriendlyHeadingAndUTCDate(t *testing.T) {
 		"<title>Direct messages: @master and @tester</title>",
 		"<h1>Direct messages: @master and @tester</h1>",
 		"November 14, 2023 at 22:13:20 UTC",
+		"Exported 1 messages. Configured limit: 1000.",
 		"white-space: pre-wrap", "overflow-wrap: anywhere",
 	} {
 		if !strings.Contains(html, required) {

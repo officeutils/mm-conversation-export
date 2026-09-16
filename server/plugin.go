@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -13,9 +15,11 @@ import (
 )
 
 const (
-	commandTrigger = "export-dm"
-	pluginID       = "com.github.officeutils.dm-export"
-	postLimit      = 100
+	commandTrigger        = "export-dm"
+	pluginID              = "com.github.officeutils.dm-export"
+	defaultMaxExportPosts = 1000
+	maxExportPostsSafety  = 10000
+	postPageSize          = 200
 )
 
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -58,6 +62,52 @@ type Plugin struct {
 	fileGetter       fileInfoGetter
 	exportStore      temporaryExportStore
 	now              func() time.Time
+	configurationMu  sync.RWMutex
+	configuration    configuration
+}
+
+type configuration struct {
+	MaxExportPosts string
+}
+
+func (p *Plugin) maxExportPosts() int {
+	p.configurationMu.RLock()
+	value := p.configuration.MaxExportPosts
+	p.configurationMu.RUnlock()
+	if value == "" {
+		return defaultMaxExportPosts
+	}
+	limit, err := parseMaxExportPosts(value)
+	if err != nil {
+		return defaultMaxExportPosts
+	}
+	return limit
+}
+
+func parseMaxExportPosts(value string) (int, error) {
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit <= 0 || limit > maxExportPostsSafety {
+		return 0, fmt.Errorf("MaxExportPosts must be a positive integer no greater than %d", maxExportPostsSafety)
+	}
+	return limit, nil
+}
+
+// OnConfigurationChange validates and applies System Console changes without a rebuild.
+func (p *Plugin) OnConfigurationChange() error {
+	var next configuration
+	if err := p.API.LoadPluginConfiguration(&next); err != nil {
+		return err
+	}
+	if next.MaxExportPosts == "" {
+		next.MaxExportPosts = strconv.Itoa(defaultMaxExportPosts)
+	}
+	if _, err := parseMaxExportPosts(next.MaxExportPosts); err != nil {
+		return err
+	}
+	p.configurationMu.Lock()
+	p.configuration = next
+	p.configurationMu.Unlock()
+	return nil
 }
 
 // OnActivate registers the slash command exposed by the plugin.
@@ -112,7 +162,7 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 	}
 
 	token := tokens[0]
-	contents, err := p.exportStore.Claim(requesterID, token)
+	export, err := p.exportStore.Claim(requesterID, token)
 	if err != nil {
 		// Ownership failures, expired tokens, invalid tokens, and replays are
 		// intentionally indistinguishable to callers.
@@ -121,10 +171,10 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="direct-messages.html"`)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, export.filename))
 	w.WriteHeader(http.StatusOK)
-	written, writeErr := w.Write(contents)
-	p.exportStore.Finish(requesterID, token, writeErr == nil && written == len(contents))
+	written, writeErr := w.Write(export.contents)
+	p.exportStore.Finish(requesterID, token, writeErr == nil && written == len(export.contents))
 }
 
 func setDownloadResponseHeaders(header http.Header) {
@@ -195,7 +245,8 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		posts = p.API
 	}
 
-	sortedPosts, appErr := getSortedChannelPosts(posts, directChannel.Id)
+	maxPosts := p.maxExportPosts()
+	sortedPosts, appErr := getSortedChannelPosts(posts, directChannel.Id, maxPosts)
 	if appErr != nil {
 		return commandError("Unable to read that direct-message conversation."), nil
 	}
@@ -214,14 +265,15 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 	if p.now != nil {
 		exportedAt = p.now()
 	}
-	contents, err := renderHTMLExport(requester, target, exportedAt, sortedPosts, attachments)
+	contents, err := renderHTMLExport(requester, target, exportedAt, maxPosts, sortedPosts, attachments)
 	if err != nil {
 		return commandError("Unable to render that direct-message export."), nil
 	}
 	if p.exportStore == nil {
 		return commandError("Export delivery is temporarily unavailable."), nil
 	}
-	token, err := p.exportStore.Put(requester.Id, contents)
+	filename := exportFilename(requester.Username, target.Username, exportedAt)
+	token, err := p.exportStore.Put(requester.Id, filename, contents)
 	if err != nil {
 		return commandError("Unable to store that direct-message export. Please download any existing export or try again later."), nil
 	}
@@ -233,20 +285,32 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 	}, nil
 }
 
-func getSortedChannelPosts(posts channelPostGetter, channelID string) ([]*model.Post, *model.AppError) {
-	postList, appErr := posts.GetPostsForChannel(channelID, 0, postLimit)
-	if appErr != nil {
-		return nil, appErr
-	}
-	if postList == nil {
-		return nil, model.NewAppError("getSortedChannelPosts", "received an empty post list", nil, "", 500)
-	}
-
-	sortedPosts := make([]*model.Post, 0, len(postList.Order))
-	for _, postID := range postList.Order {
-		if post := postList.Posts[postID]; post != nil {
-			sortedPosts = append(sortedPosts, post)
+func getSortedChannelPosts(posts channelPostGetter, channelID string, limit int) ([]*model.Post, *model.AppError) {
+	unique := make(map[string]*model.Post, limit)
+	perPage := min(postPageSize, limit)
+	for page := 0; len(unique) < limit; page++ {
+		postList, appErr := posts.GetPostsForChannel(channelID, page, perPage)
+		if appErr != nil {
+			return nil, appErr
 		}
+		if postList == nil {
+			return nil, model.NewAppError("getSortedChannelPosts", "received an empty post list", nil, "", 500)
+		}
+		for _, postID := range postList.Order {
+			if post := postList.Posts[postID]; post != nil {
+				unique[post.Id] = post
+				if len(unique) == limit {
+					break
+				}
+			}
+		}
+		if len(postList.Order) < perPage {
+			break
+		}
+	}
+	sortedPosts := make([]*model.Post, 0, len(unique))
+	for _, post := range unique {
+		sortedPosts = append(sortedPosts, post)
 	}
 
 	sort.Slice(sortedPosts, func(i, j int) bool {
@@ -257,6 +321,19 @@ func getSortedChannelPosts(posts channelPostGetter, channelID string) ([]*model.
 	})
 
 	return sortedPosts, nil
+}
+
+var unsafeFilenameCharacters = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func exportFilename(requester, target string, exportedAt time.Time) string {
+	sanitize := func(value string) string {
+		value = strings.Trim(unsafeFilenameCharacters.ReplaceAllString(value, "-"), ".-_")
+		if value == "" {
+			return "user"
+		}
+		return value
+	}
+	return fmt.Sprintf("dm-%s-%s-%s.html", sanitize(requester), sanitize(target), exportedAt.UTC().Format("2006-01-02-150405"))
 }
 
 func authorizeDirectChannel(members channelMemberGetter, channelID, requesterID, targetID string) bool {

@@ -60,15 +60,15 @@ func TestMattermost10112BoundedChannelPostsIncludeThreadReply(t *testing.T) {
 		}
 	})
 
-	postList, _, err := client.GetPostsForChannel(ctx, channel.Id, 0, postLimit, "", false, false)
+	postList, _, err := client.GetPostsForChannel(ctx, channel.Id, 0, postPageSize, "", false, false)
 	if err != nil {
 		t.Fatalf("get bounded, uncollapsed channel posts: %v", err)
 	}
 	if postList == nil {
 		t.Fatal("bounded query returned a nil post list")
 	}
-	if len(postList.Order) > postLimit {
-		t.Fatalf("bounded query returned %d posts, want at most %d", len(postList.Order), postLimit)
+	if len(postList.Order) > postPageSize {
+		t.Fatalf("bounded query returned %d posts, want at most %d", len(postList.Order), postPageSize)
 	}
 	assertPostListContains(t, postList, root.Id)
 	assertPostListContains(t, postList, reply.Id)
