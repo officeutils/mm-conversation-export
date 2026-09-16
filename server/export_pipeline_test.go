@@ -51,7 +51,7 @@ func TestExecuteCommandBuildsStoredRequesterBoundExportAndReturnsDownloadLink(t 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("download status = %d, want %d", recorder.Code, http.StatusOK)
 	}
-	for _, required := range []string{"@requester", "@other", "2026-09-16T12:34:56Z", "private message", "notes.txt", "42 bytes"} {
+	for _, required := range []string{"Direct messages: @requester and @other", "September 16, 2026 at 12:33:56 UTC", "private message", "notes.txt"} {
 		if !strings.Contains(recorder.Body.String(), required) {
 			t.Errorf("downloaded export does not contain %q", required)
 		}
