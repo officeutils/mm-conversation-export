@@ -4,6 +4,18 @@
   "description": "Self-service export of a user's own direct messages.",
   "version": "0.0.0-dev",
   "min_server_version": "10.11.2",
+  "settings_schema": {
+    "header": "Direct-message export settings",
+    "settings": [
+      {
+        "key": "MaxExportPosts",
+        "display_name": "Maximum posts per export",
+        "type": "text",
+        "help_text": "Maximum number of messages included in one export (1-10000).",
+        "default": "1000"
+      }
+    ]
+  },
   "server": {
     "executables": {
       "linux-amd64": "server/dist/plugin-linux-amd64",

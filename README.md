@@ -53,7 +53,10 @@ directories. The package version and executable paths must continue to match
 2. In Mattermost, open **System Console > Plugins > Plugin Management** and
    upload `dist/com.github.officeutils.dm-export-0.1.0.tar.gz`.
 3. Enable **DM Export** on the same Plugin Management page.
-4. Confirm that `/export-dm` appears in the slash-command autocomplete list.
+4. Under **System Console > Plugins > DM Export**, optionally set **Maximum
+   Export Posts** to the maximum number of messages included in each export.
+   The default is 1,000; accepted values are 1 through 10,000.
+5. Confirm that `/export-dm` appears in the slash-command autocomplete list.
 
 Plugin uploads and custom plugins must be permitted by the Mattermost server's
 plugin configuration. If the upload controls are unavailable, a Mattermost
@@ -79,7 +82,8 @@ download link. Open it while signed in as the same user. The link expires after
 standalone HTML and contains:
 
 - both participants and the export timestamp;
-- at most the latest 100 non-deleted posts, ordered oldest to newest within
+- at most the configured number of latest non-deleted posts (1,000 by default),
+  retrieved across channel-history pages and ordered oldest to newest within
   that bounded result, including replies returned by the channel history API;
 - each post's timestamp, author, text, and root/reply relationship; and
 - attachment metadata (filename, size, MIME type, and opaque file ID).
@@ -128,8 +132,9 @@ policies.
 
 - Only one-to-one DM channels are supported. Group messages, public channels,
   private channels, and self-DMs are rejected.
-- An export contains only the newest page of up to 100 non-deleted posts. There
-  is no pagination, deleted-post recovery, retention override, or legal-hold
+- An export contains up to the configured limit of the newest non-deleted posts
+  (1,000 by default and at most 10,000), retrieved using paginated channel
+  history. There is no deleted-post recovery, retention override, or legal-hold
   behavior.
 - Attachment metadata is included, but attachment bytes, previews, and
   download URLs are not.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"html/template"
 	"sort"
 	"time"
@@ -12,6 +13,7 @@ import (
 type exportTemplateData struct {
 	Title   string
 	Threads []exportThread
+	Notice  string
 }
 
 type exportThread struct {
@@ -56,6 +58,7 @@ var exportHTMLTemplate = template.Must(template.New("dm-export").Parse(`<!doctyp
 <body>
   <main>
     <h1>{{.Title}}</h1>
+    <p>{{.Notice}}</p>
     <ol class="threads">
       {{range .Threads}}<li class="thread">
         {{if .MissingRoot}}<p class="missing-root">Earlier message is not included in this export</p>{{else}}{{with .Root}}{{template "message" .}}{{end}}{{end}}
@@ -73,7 +76,7 @@ var exportHTMLTemplate = template.Must(template.New("dm-export").Parse(`<!doctyp
 
 // renderHTMLExport renders a complete, standalone HTML document. html/template
 // supplies context-aware escaping for participant, post, and attachment data.
-func renderHTMLExport(requester, target *model.User, _ time.Time, posts []*model.Post, attachmentsByPost map[string][]AttachmentMetadata) ([]byte, error) {
+func renderHTMLExport(requester, target *model.User, _ time.Time, maxPosts int, posts []*model.Post, attachmentsByPost map[string][]AttachmentMetadata) ([]byte, error) {
 	authors := map[string]string{}
 	participants := make([]string, 0, 2)
 	for _, user := range []*model.User{requester, target} {
@@ -154,6 +157,7 @@ func renderHTMLExport(requester, target *model.User, _ time.Time, posts []*model
 	data := exportTemplateData{
 		Title:   "Direct messages: " + participants[0] + " and " + participants[1],
 		Threads: threads,
+		Notice:  fmt.Sprintf("Exported %d messages. Configured limit: %d.", len(posts), maxPosts),
 	}
 
 	var output bytes.Buffer

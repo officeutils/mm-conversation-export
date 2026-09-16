@@ -26,13 +26,14 @@ var (
 // delivery paths. Claim reserves an export for one response writer, and Finish
 // either consumes it after a complete write or makes it available for retry.
 type temporaryExportStore interface {
-	Put(ownerID string, contents []byte) (string, error)
-	Claim(ownerID, token string) ([]byte, error)
+	Put(ownerID, filename string, contents []byte) (string, error)
+	Claim(ownerID, token string) (storedExport, error)
 	Finish(ownerID, token string, delivered bool)
 }
 
 type storedExport struct {
 	ownerID  string
+	filename string
 	contents []byte
 	expires  time.Time
 	claimed  bool
@@ -69,7 +70,7 @@ func newDefaultMemoryExportStore() *memoryExportStore {
 	return newMemoryExportStore(defaultExportTTL, defaultMaxActiveExports, defaultMaxActiveExportsOwner)
 }
 
-func (s *memoryExportStore) Put(ownerID string, contents []byte) (string, error) {
+func (s *memoryExportStore) Put(ownerID, filename string, contents []byte) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -101,6 +102,7 @@ func (s *memoryExportStore) Put(ownerID string, contents []byte) (string, error)
 
 		s.entries[token] = storedExport{
 			ownerID:  ownerID,
+			filename: filename,
 			contents: append([]byte(nil), contents...),
 			expires:  now.Add(s.ttl),
 		}
@@ -108,7 +110,7 @@ func (s *memoryExportStore) Put(ownerID string, contents []byte) (string, error)
 	}
 }
 
-func (s *memoryExportStore) Claim(ownerID, token string) ([]byte, error) {
+func (s *memoryExportStore) Claim(ownerID, token string) (storedExport, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -116,12 +118,13 @@ func (s *memoryExportStore) Claim(ownerID, token string) ([]byte, error) {
 	s.removeExpired(now)
 	entry, exists := s.entries[token]
 	if !exists || entry.ownerID != ownerID || entry.claimed {
-		return nil, errExportNotFound
+		return storedExport{}, errExportNotFound
 	}
 
 	entry.claimed = true
 	s.entries[token] = entry
-	return append([]byte(nil), entry.contents...), nil
+	entry.contents = append([]byte(nil), entry.contents...)
+	return entry, nil
 }
 
 // Finish concludes a claim. Successful delivery permanently consumes the
