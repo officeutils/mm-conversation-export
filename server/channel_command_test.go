@@ -1,7 +1,10 @@
 package main
 
 import (
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 )
@@ -113,7 +116,7 @@ func TestExportChannelCommandAllowsOnlyActiveOpenOrPrivateChannels(t *testing.T)
 			}
 			channels := &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: tt.type_, DeleteAt: deleteAt}}
 			response := executeChannelCommand(t, channels)
-			gotOK := response.Text == "The current channel is eligible for export."
+			gotOK := strings.HasPrefix(response.Text, "[Download your channel export]")
 			if gotOK != tt.wantOK {
 				t.Errorf("response text = %q, accepted = %t, want %t", response.Text, gotOK, tt.wantOK)
 			}
@@ -130,11 +133,14 @@ func TestExportChannelCommandAuthorizesMembersWithReadPermission(t *testing.T) {
 				currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: channelType}},
 				memberGetter:         members,
 				permissionChecker:    permissions,
+				postGetter:           validPostGetter(),
+				fileGetter:           &recordingFileInfoGetter{},
+				exportStore:          validExportStore(),
 			}).ExecuteCommand(nil, channelCommandArgs())
 			if appErr != nil {
 				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
 			}
-			if response.Text != "The current channel is eligible for export." {
+			if !strings.HasPrefix(response.Text, "[Download your channel export]") {
 				t.Fatalf("response text = %q", response.Text)
 			}
 			if len(members.calls) != 1 || members.calls[0] != "requester-id" {
@@ -231,6 +237,9 @@ func executeChannelCommand(t *testing.T, channels *recordingCurrentChannelGetter
 		currentChannelGetter: channels,
 		memberGetter:         validChannelCommandMemberGetter(),
 		permissionChecker:    &recordingChannelPermissionChecker{allowed: true},
+		postGetter:           validPostGetter(),
+		fileGetter:           &recordingFileInfoGetter{},
+		exportStore:          validExportStore(),
 	}).ExecuteCommand(nil, &model.CommandArgs{
 		Command:   "/export-channel",
 		UserId:    "requester-id",
@@ -243,6 +252,88 @@ func executeChannelCommand(t *testing.T, channels *recordingCurrentChannelGetter
 		t.Fatalf("unexpected response: %#v", response)
 	}
 	return response
+}
+
+type channelAuthorGetter struct {
+	users map[string]*model.User
+	errs  map[string]*model.AppError
+	calls []string
+}
+
+func (g *channelAuthorGetter) GetUser(id string) (*model.User, *model.AppError) {
+	g.calls = append(g.calls, id)
+	return g.users[id], g.errs[id]
+}
+
+func (*channelAuthorGetter) GetUserByUsername(string) (*model.User, *model.AppError) { return nil, nil }
+
+func TestExportChannelReusesPaginationLimitAttachmentsAndAuthorResolution(t *testing.T) {
+	first := fullPostPage("first", postPageSize)
+	first.Posts["first-000"].UserId = "author-a"
+	first.Posts["first-000"].Message = "from Alice"
+	first.Posts["first-000"].FileIds = []string{"file-id"}
+	second := postPage("last")
+	second.Posts["last"].UserId = "author-b"
+	second.Posts["last"].Message = "from Bob"
+	posts := &recordingPostGetter{postLists: []*model.PostList{first, second}}
+	files := &recordingFileInfoGetter{infos: map[string]*model.FileInfo{"file-id": {Id: "file-id", Name: "notes.txt", Size: 12, MimeType: "text/plain"}}, errs: map[string]*model.AppError{}}
+	users := &channelAuthorGetter{users: map[string]*model.User{
+		"author-a": {Id: "author-a", Username: "alice"},
+		"author-b": {Id: "author-b", Username: "bob"},
+	}, errs: map[string]*model.AppError{}}
+	store := validExportStore()
+	p := &Plugin{
+		currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Name: "town-square", DisplayName: "Town Square", Type: model.ChannelTypeOpen}},
+		memberGetter:         validChannelCommandMemberGetter(), permissionChecker: &recordingChannelPermissionChecker{allowed: true},
+		postGetter: posts, fileGetter: files, userGetter: users, exportStore: store,
+		now: func() time.Time { return time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC) },
+	}
+	p.configuration.MaxExportPosts = "201"
+
+	response, appErr := p.ExecuteCommand(nil, channelCommandArgs())
+	if appErr != nil || !strings.HasPrefix(response.Text, "[Download your channel export]") {
+		t.Fatalf("ExecuteCommand = %#v, %v", response, appErr)
+	}
+	if !reflect.DeepEqual(posts.pages, []int{0, 1}) || !reflect.DeepEqual(posts.perPages, []int{200, 200}) {
+		t.Errorf("pagination = pages %v sizes %v", posts.pages, posts.perPages)
+	}
+	if !reflect.DeepEqual(files.calls, []string{"file-id"}) {
+		t.Errorf("attachment metadata calls = %v", files.calls)
+	}
+	if !reflect.DeepEqual(users.calls, []string{"author-a", "author-b"}) {
+		t.Errorf("author calls = %v", users.calls)
+	}
+	html := string(store.contents)
+	for _, want := range []string{"Channel: Town Square", "@alice", "@bob", "notes.txt", "Exported 201 messages. Configured limit: 201."} {
+		if !strings.Contains(html, want) {
+			t.Errorf("export missing %q", want)
+		}
+	}
+	if store.ownerID != "requester-id" || store.filename != "channel-town-square-2026-09-17-120000.html" {
+		t.Errorf("stored export owner/file = %q/%q", store.ownerID, store.filename)
+	}
+}
+
+func TestExportChannelUsesSafeFallbackAuthorLabelsAndKeepsReplies(t *testing.T) {
+	list := &model.PostList{Order: []string{"reply", "root", "system"}, Posts: map[string]*model.Post{
+		"reply":  {Id: "reply", RootId: "root", UserId: "missing-user", CreateAt: 2, Message: "reply body"},
+		"root":   {Id: "root", UserId: "known-user", CreateAt: 1, Message: "root body"},
+		"system": {Id: "system", CreateAt: 3, Message: "system body"},
+	}}
+	users := &channelAuthorGetter{users: map[string]*model.User{"known-user": {Id: "known-user", Username: "known"}}, errs: map[string]*model.AppError{"missing-user": model.NewAppError("test", "gone", nil, "", 404)}}
+	store := validExportStore()
+	p := &Plugin{currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Name: "channel", Type: model.ChannelTypePrivate}}, memberGetter: validChannelCommandMemberGetter(), permissionChecker: &recordingChannelPermissionChecker{allowed: true}, postGetter: &recordingPostGetter{postList: list}, fileGetter: &recordingFileInfoGetter{}, userGetter: users, exportStore: store}
+	p.ExecuteCommand(nil, channelCommandArgs())
+	html := string(store.contents)
+	for _, want := range []string{"@known", "Unknown user", "System", "root body", "reply body"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("export missing %q", want)
+		}
+	}
+	if strings.Contains(html, "missing-user") {
+		t.Error("unresolved user ID leaked into export")
+	}
+	assertInOrder(t, html, "root body", "reply body", "system body")
 }
 
 func validChannelCommandMemberGetter() *memberLookup {
