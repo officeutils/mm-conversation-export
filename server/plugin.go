@@ -17,7 +17,7 @@ import (
 const (
 	commandTrigger        = "export-dm"
 	channelCommandTrigger = "export-channel"
-	pluginID              = "com.github.officeutils.dm-export"
+	pluginID              = "com.officeutils.mm-conversation-export"
 	defaultMaxExportPosts = 1000
 	maxExportPostsSafety  = 10000
 	postPageSize          = 200
@@ -63,7 +63,7 @@ type configurationLoader interface {
 	LoadPluginConfiguration(dest any) error
 }
 
-// Plugin is the server-side DM export plugin.
+// Plugin is the server-side conversation export plugin.
 type Plugin struct {
 	plugin.MattermostPlugin
 

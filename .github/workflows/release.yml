@@ -35,9 +35,9 @@ jobs:
 
       - name: Verify release package
         run: |
-          expected="dist/mm-dm-export-${VERSION}.tar.gz"
+          expected="dist/mm-conversation-export-${VERSION}.tar.gz"
           test -f "$expected"
-          mapfile -t packages < <(find dist -maxdepth 1 -type f -name 'mm-dm-export-*.tar.gz')
+          mapfile -t packages < <(find dist -maxdepth 1 -type f -name 'mm-conversation-export-*.tar.gz')
           test "${#packages[@]}" -eq 1
           test "${packages[0]}" = "$expected"
 
@@ -46,5 +46,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$GITHUB_REF_NAME" \
-            "dist/mm-dm-export-${VERSION}.tar.gz" \
+            "dist/mm-conversation-export-${VERSION}.tar.gz" \
             --clobber

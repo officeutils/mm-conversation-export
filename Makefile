@@ -1,5 +1,5 @@
-PLUGIN_ID := com.github.officeutils.dm-export
-PACKAGE_NAME := mm-dm-export
+PLUGIN_ID := com.officeutils.mm-conversation-export
+PACKAGE_NAME := mm-conversation-export
 PACKAGE = dist/$(PACKAGE_NAME)-$(VERSION).tar.gz
 
 BINARIES := \
