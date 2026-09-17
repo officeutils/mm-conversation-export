@@ -97,7 +97,7 @@ func TestExecuteCommandGetsFileInfoWithoutAttachmentContents(t *testing.T) {
 	if appErr != nil {
 		t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
 	}
-	if response.Text != "[Download your direct-message export with @other](/plugins/com.github.officeutils.dm-export/download?token=test-token). This one-time link expires in 10 minutes." {
+	if response.Text != "[Download your direct-message export with @other](/plugins/com.officeutils.mm-conversation-export/download?token=test-token). This one-time link expires in 10 minutes." {
 		t.Fatalf("response text = %q", response.Text)
 	}
 	if !reflect.DeepEqual(files.calls, []string{"file-id"}) {

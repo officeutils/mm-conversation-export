@@ -1,6 +1,6 @@
 # MVP Implementation Plan
 
-This document is the frozen implementation specification for the Mattermost DM export MVP.
+This document is the frozen implementation specification for the Mattermost Conversation Export MVP.
 
 ## Architecture
 

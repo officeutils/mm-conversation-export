@@ -13,8 +13,8 @@ func TestExecuteCommandAcceptsExactlyOneUsername(t *testing.T) {
 		command string
 		want    string
 	}{
-		{name: "plain username", command: "/export-dm other-user", want: "[Download your direct-message export with @other-user](/plugins/com.github.officeutils.dm-export/download?token=test-token). This one-time link expires in 10 minutes."},
-		{name: "leading at sign", command: "/export-dm @other.user", want: "[Download your direct-message export with @other.user](/plugins/com.github.officeutils.dm-export/download?token=test-token). This one-time link expires in 10 minutes."},
+		{name: "plain username", command: "/export-dm other-user", want: "[Download your direct-message export with @other-user](/plugins/com.officeutils.mm-conversation-export/download?token=test-token). This one-time link expires in 10 minutes."},
+		{name: "leading at sign", command: "/export-dm @other.user", want: "[Download your direct-message export with @other.user](/plugins/com.officeutils.mm-conversation-export/download?token=test-token). This one-time link expires in 10 minutes."},
 	}
 
 	for _, tt := range tests {

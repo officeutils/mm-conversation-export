@@ -1,4 +1,4 @@
-module github.com/officeutils/mm-dm-export
+module github.com/officeutils/mm-conversation-export
 
 go 1.23.0
 

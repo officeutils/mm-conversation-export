@@ -1,10 +1,13 @@
-# Mattermost DM Export
+# Mattermost Conversation Export
 
-Mattermost DM Export is a server-side plugin for Mattermost Community Edition
-that lets a signed-in user export an existing one-to-one direct-message
-conversation in a standalone HTML file. It is intentionally a narrow,
-self-service feature: it is not an administrative, compliance, or database
-export tool.
+Mattermost Conversation Export is a server-side plugin for Mattermost Community
+Edition that lets signed-in users export one-to-one direct-message
+conversations they participate in. Administrators may also opt in to current
+public/private-channel export; it is disabled by default, and users can export
+only a current channel they belong to and are authorized to read. Administrator
+status does not override those checks, and callers cannot select an arbitrary
+inaccessible channel. The plugin does not recover deleted messages or provide
+compliance, organization-wide, or direct-database export.
 
 ## Compatibility
 
@@ -28,7 +31,7 @@ root:
 ```sh
 make test       # run the Go test suite
 make build      # cross-compile every executable declared in plugin.json
-make package    # build and create dist/com.github.officeutils.dm-export-0.1.0.tar.gz
+make package VERSION=0.1.0 # build dist/mm-conversation-export-0.1.0.tar.gz
 ```
 
 `make package` creates a Mattermost plugin bundle with this layout:
@@ -51,9 +54,9 @@ directories. The package version and executable paths must continue to match
 1. Build the bundle with `make package`, or download the equivalent archive
    from a trusted project release.
 2. In Mattermost, open **System Console > Plugins > Plugin Management** and
-   upload `dist/com.github.officeutils.dm-export-0.1.0.tar.gz`.
-3. Enable **DM Export** on the same Plugin Management page.
-4. Under **System Console > Plugins > DM Export**, optionally set **Maximum
+   upload `dist/mm-conversation-export-0.1.0.tar.gz`.
+3. Enable **Mattermost Conversation Export** on the same Plugin Management page.
+4. Under **System Console > Plugins > Mattermost Conversation Export**, optionally set **Maximum
    Export Posts** to the maximum number of messages included in each export.
    The default is 1,000; accepted values are 1 through 10,000.
 5. To permit current-channel exports, explicitly turn on **Enable channel

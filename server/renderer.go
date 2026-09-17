@@ -34,7 +34,7 @@ type exportMessage struct {
 	id           string
 }
 
-var exportHTMLTemplate = template.Must(template.New("dm-export").Parse(`<!doctype html>
+var exportHTMLTemplate = template.Must(template.New("conversation-export").Parse(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">

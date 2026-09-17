@@ -1,7 +1,7 @@
 {
-  "id": "com.github.officeutils.dm-export",
-  "name": "DM Export",
-  "description": "Self-service export of direct messages and administrator-enabled current channels.",
+  "id": "com.officeutils.mm-conversation-export",
+  "name": "Mattermost Conversation Export",
+  "description": "Self-service export of participating DMs and opt-in, authorized current public/private channels.",
   "version": "0.0.0-dev",
   "min_server_version": "10.11.2",
   "settings_schema": {

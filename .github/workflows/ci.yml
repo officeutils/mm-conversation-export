@@ -38,5 +38,5 @@ jobs:
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
-          name: com.github.officeutils.dm-export
-          path: dist/mm-dm-export-0.0.0-dev.tar.gz
+          name: mm-conversation-export
+          path: dist/mm-conversation-export-0.0.0-dev.tar.gz
