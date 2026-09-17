@@ -42,6 +42,10 @@ type currentChannelGetter interface {
 	GetChannel(channelID string) (*model.Channel, *model.AppError)
 }
 
+type channelPermissionChecker interface {
+	HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool
+}
+
 type channelMemberGetter interface {
 	GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError)
 	GetChannelMembers(channelID string, page, perPage int) (model.ChannelMembers, *model.AppError)
@@ -68,6 +72,7 @@ type Plugin struct {
 	channelGetter        channelGetter
 	currentChannelGetter currentChannelGetter
 	memberGetter         channelMemberGetter
+	permissionChecker    channelPermissionChecker
 	postGetter           channelPostGetter
 	fileGetter           fileInfoGetter
 	configurationLoader  configurationLoader
@@ -336,6 +341,23 @@ func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.Com
 	channel, appErr := channels.GetChannel(args.ChannelId)
 	if appErr != nil || channel == nil || channel.Id != args.ChannelId || channel.DeleteAt != 0 ||
 		(channel.Type != model.ChannelTypeOpen && channel.Type != model.ChannelTypePrivate) {
+		return commandError("Unable to export the current channel.")
+	}
+
+	members := p.memberGetter
+	if members == nil {
+		members = p.API
+	}
+	member, appErr := members.GetChannelMember(channel.Id, args.UserId)
+	if appErr != nil || !isExpectedMember(member, channel.Id, args.UserId) {
+		return commandError("Unable to export the current channel.")
+	}
+
+	permissions := p.permissionChecker
+	if permissions == nil {
+		permissions = p.API
+	}
+	if !permissions.HasPermissionToChannel(args.UserId, channel.Id, model.PermissionReadChannel) {
 		return commandError("Unable to export the current channel.")
 	}
 

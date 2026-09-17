@@ -21,14 +21,15 @@ type recordingChannelGetter struct {
 }
 
 type memberLookup struct {
-	members      map[string]*model.ChannelMember
-	memberErrors map[string]*model.AppError
-	allMembers   model.ChannelMembers
-	allErr       *model.AppError
-	calls        []string
-	channelID    string
-	page         int
-	perPage      int
+	members          map[string]*model.ChannelMember
+	memberErrors     map[string]*model.AppError
+	allMembers       model.ChannelMembers
+	allErr           *model.AppError
+	calls            []string
+	memberChannelIDs []string
+	channelID        string
+	page             int
+	perPage          int
 }
 
 type recordingPostGetter struct {
@@ -47,6 +48,22 @@ type recordingFileInfoGetter struct {
 	infos map[string]*model.FileInfo
 	errs  map[string]*model.AppError
 	calls []string
+}
+
+type recordingChannelPermissionChecker struct {
+	allowed    bool
+	userID     string
+	channelID  string
+	permission *model.Permission
+	calls      int
+}
+
+func (c *recordingChannelPermissionChecker) HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool {
+	c.calls++
+	c.userID = userID
+	c.channelID = channelID
+	c.permission = permission
+	return c.allowed
 }
 
 func (g *recordingFileInfoGetter) GetFileInfo(fileID string) (*model.FileInfo, *model.AppError) {
@@ -69,6 +86,7 @@ func (g *recordingPostGetter) GetPostsForChannel(channelID string, page, perPage
 
 func (g *memberLookup) GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError) {
 	g.calls = append(g.calls, userID)
+	g.memberChannelIDs = append(g.memberChannelIDs, channelID)
 	return g.members[userID], g.memberErrors[userID]
 }
 
