@@ -8,13 +8,17 @@ import (
 )
 
 type recordingRegistrar struct {
-	command *model.Command
-	err     error
+	commands []*model.Command
+	err      error
+	failAt   int
 }
 
 func (r *recordingRegistrar) RegisterCommand(command *model.Command) error {
-	r.command = command
-	return r.err
+	r.commands = append(r.commands, command)
+	if r.failAt == len(r.commands) {
+		return r.err
+	}
+	return nil
 }
 
 func TestOnActivateRegistersExportDMCommand(t *testing.T) {
@@ -25,25 +29,39 @@ func TestOnActivateRegistersExportDMCommand(t *testing.T) {
 		t.Fatalf("OnActivate returned an error: %v", err)
 	}
 
-	if registrar.command == nil {
-		t.Fatal("OnActivate did not register a command")
+	if len(registrar.commands) != 2 {
+		t.Fatalf("registered %d commands, want 2", len(registrar.commands))
 	}
-	if registrar.command.Trigger != commandTrigger {
-		t.Errorf("command trigger = %q, want %q", registrar.command.Trigger, commandTrigger)
+	command := registrar.commands[0]
+	if command.Trigger != commandTrigger {
+		t.Errorf("command trigger = %q, want %q", command.Trigger, commandTrigger)
 	}
-	if !registrar.command.AutoComplete {
+	if !command.AutoComplete {
 		t.Error("command autocomplete is disabled")
 	}
-	if registrar.command.AutoCompleteHint != "@username" {
-		t.Errorf("command autocomplete hint = %q, want %q", registrar.command.AutoCompleteHint, "@username")
+	if command.AutoCompleteHint != "@username" {
+		t.Errorf("command autocomplete hint = %q, want %q", command.AutoCompleteHint, "@username")
+	}
+
+	channelCommand := registrar.commands[1]
+	if channelCommand.Trigger != channelCommandTrigger {
+		t.Errorf("channel command trigger = %q, want %q", channelCommand.Trigger, channelCommandTrigger)
+	}
+	if !channelCommand.AutoComplete {
+		t.Error("channel command autocomplete is disabled")
+	}
+	if channelCommand.AutoCompleteHint != "" {
+		t.Errorf("channel command autocomplete hint = %q, want empty", channelCommand.AutoCompleteHint)
 	}
 }
 
 func TestOnActivateReturnsRegistrationError(t *testing.T) {
-	want := errors.New("registration failed")
-	p := &Plugin{commandRegistrar: &recordingRegistrar{err: want}}
+	for _, failAt := range []int{1, 2} {
+		want := errors.New("registration failed")
+		p := &Plugin{commandRegistrar: &recordingRegistrar{err: want, failAt: failAt}}
 
-	if got := p.OnActivate(); !errors.Is(got, want) {
-		t.Fatalf("OnActivate error = %v, want %v", got, want)
+		if got := p.OnActivate(); !errors.Is(got, want) {
+			t.Fatalf("registration %d: OnActivate error = %v, want %v", failAt, got, want)
+		}
 	}
 }
