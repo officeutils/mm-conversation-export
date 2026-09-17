@@ -362,19 +362,6 @@ func getSortedChannelPosts(posts channelPostGetter, channelID string, limit int)
 	return sortedPosts, nil
 }
 
-var unsafeFilenameCharacters = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
-
-func exportFilename(requester, target string, exportedAt time.Time) string {
-	sanitize := func(value string) string {
-		value = strings.Trim(unsafeFilenameCharacters.ReplaceAllString(value, "-"), ".-_")
-		if value == "" {
-			return "user"
-		}
-		return value
-	}
-	return fmt.Sprintf("dm-%s-%s-%s.html", sanitize(requester), sanitize(target), exportedAt.UTC().Format("2006-01-02-150405"))
-}
-
 func authorizeDirectChannel(members channelMemberGetter, channelID, requesterID, targetID string) bool {
 	requesterMember, appErr := members.GetChannelMember(channelID, requesterID)
 	if appErr != nil || !isExpectedMember(requesterMember, channelID, requesterID) {

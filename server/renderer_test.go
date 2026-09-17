@@ -174,3 +174,76 @@ func TestRenderHTMLExportIgnoresNilPosts(t *testing.T) {
 		t.Fatalf("nil posts affected rendered output:\n%s", html)
 	}
 }
+
+func TestRenderChannelHTMLExportUsesChannelTitleAndResolvedAuthors(t *testing.T) {
+	posts := []*model.Post{
+		{Id: "root", UserId: "first-id", CreateAt: 1_700_000_000_000, Message: "opening"},
+		{Id: "reply", RootId: "root", UserId: "second-id", CreateAt: 1_700_000_001_000, Message: "response"},
+	}
+	got, err := renderChannelHTMLExport(
+		&model.Channel{DisplayName: "Project <alpha> & friends", Name: "project-alpha"},
+		map[string]string{"first-id": "@first", "second-id": "@second"},
+		25,
+		posts,
+		map[string][]AttachmentMetadata{"reply": {{Filename: `notes <final>.txt`}}},
+	)
+	if err != nil {
+		t.Fatalf("renderChannelHTMLExport returned an error: %v", err)
+	}
+
+	html := string(got)
+	for _, required := range []string{
+		"<title>Channel: Project &lt;alpha&gt; &amp; friends</title>",
+		"<h1>Channel: Project &lt;alpha&gt; &amp; friends</h1>",
+		"<strong>@first</strong>", "<strong>@second</strong>",
+		"November 14, 2023 at 22:13:20 UTC", "notes &lt;final&gt;.txt",
+		"Exported 2 messages. Configured limit: 25.",
+	} {
+		if !strings.Contains(html, required) {
+			t.Errorf("rendered HTML does not contain %q", required)
+		}
+	}
+	assertInOrder(t, html, "opening", `class="replies"`, "response")
+}
+
+func TestRenderChannelHTMLExportEscapesHostileContentAndUsesFallbackAuthors(t *testing.T) {
+	attack := `<script>alert("channel")</script>`
+	posts := []*model.Post{
+		{Id: "unknown", UserId: "missing-id", CreateAt: 2_000, Message: attack},
+		{Id: "system", CreateAt: 1_000, Message: "system message"},
+	}
+	channel := &model.Channel{DisplayName: attack, Name: "fallback-name"}
+
+	first, err := renderChannelHTMLExport(channel, nil, 10, posts, nil)
+	if err != nil {
+		t.Fatalf("first render returned an error: %v", err)
+	}
+	second, err := renderChannelHTMLExport(channel, nil, 10, posts, nil)
+	if err != nil {
+		t.Fatalf("second render returned an error: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatal("identical channel export data produced different HTML")
+	}
+
+	html := string(first)
+	if strings.Contains(html, "<script>") || strings.Contains(html, attack) {
+		t.Fatalf("rendered HTML contains unescaped channel data: %s", html)
+	}
+	for _, required := range []string{"&lt;script&gt;", "<strong>System</strong>", "<strong>Unknown user</strong>"} {
+		if !strings.Contains(html, required) {
+			t.Errorf("rendered HTML does not contain %q", required)
+		}
+	}
+	assertInOrder(t, html, "system message", "Unknown user", "&lt;script&gt;")
+}
+
+func TestRenderChannelHTMLExportFallsBackToChannelName(t *testing.T) {
+	got, err := renderChannelHTMLExport(&model.Channel{Name: "town-square"}, nil, 10, nil, nil)
+	if err != nil {
+		t.Fatalf("renderChannelHTMLExport returned an error: %v", err)
+	}
+	if !strings.Contains(string(got), "<h1>Channel: town-square</h1>") {
+		t.Fatalf("channel name was not used as the heading: %s", got)
+	}
+}
