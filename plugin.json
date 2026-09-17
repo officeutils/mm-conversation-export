@@ -1,11 +1,11 @@
 {
   "id": "com.github.officeutils.dm-export",
   "name": "DM Export",
-  "description": "Self-service export of a user's own direct messages.",
+  "description": "Self-service export of direct messages and administrator-enabled current channels.",
   "version": "0.0.0-dev",
   "min_server_version": "10.11.2",
   "settings_schema": {
-    "header": "Direct-message export settings",
+    "header": "Message export settings",
     "settings": [
       {
         "key": "MaxExportPosts",

@@ -37,7 +37,7 @@ func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.Com
 	}
 	channel, appErr := channels.GetChannel(args.ChannelId)
 	if appErr != nil || channel == nil || channel.Id != args.ChannelId || channel.DeleteAt != 0 ||
-		!isExportableChannelType(channel.Type) {
+		!isSupportedExportChannelType(channel.Type) {
 		return commandError("Unable to export the current channel.")
 	}
 
@@ -107,7 +107,10 @@ func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.Com
 	return &model.CommandResponse{ResponseType: "ephemeral", Text: fmt.Sprintf("[Download your channel export](/plugins/%s/download?token=%s). This one-time link expires in 10 minutes.", pluginID, token)}
 }
 
-func isExportableChannelType(channelType model.ChannelType) bool {
+// isSupportedExportChannelType keeps the two export scopes explicit: direct
+// messages remain supported, while public and private channels are reachable
+// only through the administrator-enabled current-channel command above.
+func isSupportedExportChannelType(channelType model.ChannelType) bool {
 	return channelType == model.ChannelTypeOpen || channelType == model.ChannelTypePrivate || channelType == model.ChannelTypeDirect
 }
 

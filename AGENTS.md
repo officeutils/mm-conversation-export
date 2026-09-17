@@ -2,7 +2,9 @@
 
 ## Project
 
-Open-source Mattermost CE plugin for self-service export of a user's own direct messages.
+Open-source Mattermost CE plugin for self-service export of a user's own direct
+messages, with an administrator-enabled current-channel export for public and
+private channels.
 
 ## Core constraints
 
