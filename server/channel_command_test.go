@@ -28,6 +28,9 @@ func TestExportChannelCommandAcceptsExactCommandAndCurrentContext(t *testing.T) 
 		currentChannelGetter: channels,
 		memberGetter:         validChannelCommandMemberGetter(),
 		permissionChecker:    &recordingChannelPermissionChecker{allowed: true},
+		postGetter:           validPostGetter(),
+		fileGetter:           &recordingFileInfoGetter{},
+		exportStore:          validExportStore(),
 	}).ExecuteCommand(nil, &model.CommandArgs{
 		Command:   "/export-channel",
 		UserId:    "requester-id",
