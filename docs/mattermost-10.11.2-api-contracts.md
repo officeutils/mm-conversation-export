@@ -22,8 +22,10 @@ RegisterCommand(command *model.Command) error
 GetUser(userID string) (*model.User, *model.AppError)
 GetUserByUsername(name string) (*model.User, *model.AppError)
 GetChannelsForTeamForUser(teamID, userID string, includeDeleted bool) ([]*model.Channel, *model.AppError)
+GetChannel(channelID string) (*model.Channel, *model.AppError)
 GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError)
 GetChannelMembers(channelID string, page, perPage int) (model.ChannelMembers, *model.AppError)
+HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool
 GetPostsForChannel(channelID string, page, perPage int) (*model.PostList, *model.AppError)
 GetFileInfo(fileID string) (*model.FileInfo, *model.AppError)
 ```
@@ -35,6 +37,28 @@ Sources: [`server/public/plugin/hooks.go`](https://github.com/mattermost/matterm
 Two details matter when defining narrow mock interfaces: `GetChannelMembers`
 returns the named slice type `model.ChannelMembers`, not `[]*model.ChannelMember`,
 and every read method above returns a `*model.AppError` rather than a Go `error`.
+
+## Current-channel command context and authorization
+
+For a slash command invoked through Mattermost 10.11.2, the server supplies the
+active channel as `CommandArgs.ChannelId`; the plugin does not accept a channel
+identifier in `/export-channel` command text. Integration coverage invokes the
+installed command in both public and private channels and requires the export
+to succeed only for the configured current channel.
+
+Channel export is a disabled-by-default configuration opt-in. Once enabled, the
+plugin accepts active public, private, and one-to-one direct channels, but only
+after `GetChannelMember(channelID, userID)` returns the exact requested pair and
+`HasPermissionToChannel(userID, channelID, model.PermissionReadChannel)` is
+true. Both checks apply to every role, including guests and system
+administrators; there is no administrator override. Public visibility does not
+replace explicit membership for a guest. Direct channels additionally require
+exactly two distinct participants.
+
+Sources: [`server/api4/command.go`](https://github.com/mattermost/mattermost/blob/v10.11.2/server/api4/command.go),
+[`server/public/model/command_args.go`](https://github.com/mattermost/mattermost/blob/v10.11.2/server/public/model/command_args.go),
+[`server/public/plugin/api.go`](https://github.com/mattermost/mattermost/blob/v10.11.2/server/public/plugin/api.go), and
+[`server/plugin/api.go`](https://github.com/mattermost/mattermost/blob/v10.11.2/server/plugin/api.go).
 
 ## Channel enumeration
 
@@ -74,6 +98,13 @@ channel history query, so replies are ordinary channel posts in this result; no
 `GetPostThread` call is required. The reply behavior remains worth protecting
 with the planned 10.11.2 integration/regression test because collapsed-thread
 REST options are a separate query mode.
+
+There is no reliable, generally applicable membership-start boundary exposed
+by these calls. `GetPostsForChannel` pages channel history; it does not take a
+"since requester joined" argument. A currently authorized member may therefore
+receive older posts within the configured latest-history limit when Mattermost
+makes those posts visible. The plugin must not present its bounded export as
+membership-duration history.
 
 Sources: [`server/plugin/api.go`](https://github.com/mattermost/mattermost/blob/v10.11.2/server/plugin/api.go),
 [`server/post.go`](https://github.com/mattermost/mattermost/blob/v10.11.2/server/post.go), and
@@ -132,9 +163,19 @@ Sources: [`server/plugin/api.go`](https://github.com/mattermost/mattermost/blob/
 
 1. Enumerate with an empty team ID, then explicitly filter to direct channels.
 2. Verify requester and target membership independently before reading posts.
-3. Call `GetPostsForChannel(channelID, 0, 100)` once, respect the returned IDs,
-   and impose deterministic chronological output ordering.
+3. Page `GetPostsForChannel` from the newest history until the configured limit
+   is reached, respect the returned IDs, and impose deterministic chronological
+   output ordering; retain ordinary reply inclusion and non-deleted semantics.
 4. Fetch only `FileInfo`; never fetch attachment bytes.
 5. Reject an empty `Mattermost-User-Id`, then require exact token ownership.
 6. Keep a 10.11.2 integration test for reply inclusion even though the audited
    default query is uncollapsed.
+7. Keep 10.11.2 integration coverage for current public/private command channel
+   IDs and guest public-channel membership, backed by explicit
+   `PermissionReadChannel` unit coverage.
+
+Attachment handling remains metadata-only: attachment bytes and download URLs
+are not included. Generated exports and claim tokens are held in bounded,
+single-process temporary memory. They disappear on restart and are unavailable
+to another Mattermost node, so multi-node delivery requires routing the
+download back to the same node; shared storage is not implemented.

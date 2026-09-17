@@ -147,15 +147,15 @@ func TestExportChannelCommandRejectsLookupAndIdentityFailures(t *testing.T) {
 	}
 }
 
-func TestExportChannelCommandAllowsOnlyActiveDirectChannels(t *testing.T) {
+func TestExportChannelCommandAllowsOnlyActiveSupportedChannels(t *testing.T) {
 	tests := []struct {
 		name    string
 		type_   model.ChannelType
 		deleted bool
 		wantOK  bool
 	}{
-		{name: "open", type_: model.ChannelTypeOpen},
-		{name: "private", type_: model.ChannelTypePrivate},
+		{name: "open", type_: model.ChannelTypeOpen, wantOK: true},
+		{name: "private", type_: model.ChannelTypePrivate, wantOK: true},
 		{name: "direct", type_: model.ChannelTypeDirect, wantOK: true},
 		{name: "group", type_: model.ChannelTypeGroup},
 		{name: "unknown", type_: model.ChannelType("x")},
@@ -179,8 +179,41 @@ func TestExportChannelCommandAllowsOnlyActiveDirectChannels(t *testing.T) {
 	}
 }
 
-func TestExportChannelCommandAuthorizesDirectMembersWithReadPermission(t *testing.T) {
-	for _, channelType := range []model.ChannelType{model.ChannelTypeDirect} {
+func TestExportChannelCommandRejectsPublicAndPrivateWithoutMembershipOrReadPermission(t *testing.T) {
+	for _, channelType := range []model.ChannelType{model.ChannelTypeOpen, model.ChannelTypePrivate} {
+		for _, tc := range []struct {
+			name       string
+			member     *model.ChannelMember
+			permission bool
+		}{
+			{name: "not a member", permission: true},
+			{name: "no read permission", member: &model.ChannelMember{ChannelId: "channel-id", UserId: "requester-id"}},
+		} {
+			t.Run(string(channelType)+"/"+tc.name, func(t *testing.T) {
+				posts := validPostGetter()
+				response, appErr := (&Plugin{
+					configuration:        configuration{EnableChannelExport: true},
+					currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: channelType}},
+					memberGetter: &memberLookup{
+						members:      map[string]*model.ChannelMember{"requester-id": tc.member},
+						memberErrors: map[string]*model.AppError{},
+					},
+					permissionChecker: &recordingChannelPermissionChecker{allowed: tc.permission},
+					postGetter:        posts,
+				}).ExecuteCommand(nil, channelCommandArgs())
+				if appErr != nil || response.Text != "Unable to export the current channel." {
+					t.Fatalf("ExecuteCommand = %#v, %v", response, appErr)
+				}
+				if posts.calls != 0 {
+					t.Errorf("GetPostsForChannel calls = %d, want 0", posts.calls)
+				}
+			})
+		}
+	}
+}
+
+func TestExportChannelCommandAuthorizesSupportedChannelMembersWithReadPermission(t *testing.T) {
+	for _, channelType := range []model.ChannelType{model.ChannelTypeOpen, model.ChannelTypePrivate, model.ChannelTypeDirect} {
 		t.Run(string(channelType), func(t *testing.T) {
 			members := validChannelCommandMemberGetter()
 			permissions := &recordingChannelPermissionChecker{allowed: true}
@@ -205,8 +238,11 @@ func TestExportChannelCommandAuthorizesDirectMembersWithReadPermission(t *testin
 			if len(members.memberChannelIDs) != 1 || members.memberChannelIDs[0] != "channel-id" {
 				t.Errorf("GetChannelMember channel IDs = %v, want [channel-id]", members.memberChannelIDs)
 			}
-			if members.channelID != "channel-id" || members.page != 0 || members.perPage != 3 {
+			if channelType == model.ChannelTypeDirect && (members.channelID != "channel-id" || members.page != 0 || members.perPage != 3) {
 				t.Errorf("GetChannelMembers args = (%q, %d, %d), want (channel-id, 0, 3)", members.channelID, members.page, members.perPage)
+			}
+			if channelType != model.ChannelTypeDirect && members.channelID != "" {
+				t.Errorf("GetChannelMembers called for %s channel", channelType)
 			}
 			if permissions.calls != 1 || permissions.userID != "requester-id" || permissions.channelID != "channel-id" || permissions.permission != model.PermissionReadChannel {
 				t.Errorf("HasPermissionToChannel calls/args = %d, %q, %q, %v", permissions.calls, permissions.userID, permissions.channelID, permissions.permission)

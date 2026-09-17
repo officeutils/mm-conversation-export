@@ -18,7 +18,7 @@
         "key": "EnableChannelExport",
         "display_name": "Enable channel export",
         "type": "bool",
-        "help_text": "Enable channel export functionality.",
+        "help_text": "Opt in to /export-channel for the current public, private, or direct channel. Membership and read permission are always required.",
         "default": false
       }
     ]

@@ -56,7 +56,11 @@ directories. The package version and executable paths must continue to match
 4. Under **System Console > Plugins > DM Export**, optionally set **Maximum
    Export Posts** to the maximum number of messages included in each export.
    The default is 1,000; accepted values are 1 through 10,000.
-5. Confirm that `/export-dm` appears in the slash-command autocomplete list.
+5. To permit current-channel exports, explicitly turn on **Enable channel
+   export**. This opt-in is disabled by default.
+6. Confirm that `/export-dm` and `/export-channel` appear in slash-command
+   autocomplete. A registered `/export-channel` command still refuses exports
+   while its setting is disabled.
 
 Plugin uploads and custom plugins must be permitted by the Mattermost server's
 plugin configuration. If the upload controls are unavailable, a Mattermost
@@ -65,6 +69,8 @@ approved for that installation. In a multi-node deployment, see the storage
 limitation below before enabling this plugin.
 
 ## Usage
+
+### Direct messages by username
 
 In any Mattermost channel, enter:
 
@@ -90,6 +96,27 @@ standalone HTML and contains:
 
 The attachment files themselves are not included.
 
+### Current channel
+
+When **Enable channel export** has been turned on by a system administrator,
+enter this with no arguments in the channel to export:
+
+```text
+/export-channel
+```
+
+The command exports only the current public, private, or one-to-one direct
+channel identified by Mattermost's authenticated command context. It does not
+accept a channel name or ID and cannot be invoked in one channel to export
+another. The requester must be a current member and must have
+`PermissionReadChannel`; public-channel visibility alone is not sufficient for
+a guest who has not joined the channel. Direct channels retain the additional
+two-participant validation used by `/export-dm`.
+
+Current-channel exports use the same configured history limit, paginated latest
+non-deleted history, reply inclusion, attachment-metadata handling, one-time
+delivery, and process-local temporary storage as direct-message exports.
+
 Only one active export may exist per user. Download or allow an existing link
 to expire before requesting another. Each plugin process holds at most four
 active exports, so a temporarily busy instance can reject a new request.
@@ -108,6 +135,11 @@ The export pipeline applies the following boundaries explicitly:
   both the requester and target are the only two channel members before it
   reads posts. A user cannot supply a channel ID. Administrator status does
   not bypass these checks.
+- **Authorized current channel only.** The optional `/export-channel` path
+  accepts only the `CommandArgs.ChannelId` supplied for the current active
+  public, private, or direct channel. It independently requires matching
+  membership and `PermissionReadChannel` before reading posts. Administrators
+  have no override: they must pass the same membership and permission checks.
 - **Owner-bound delivery.** Download tokens contain 32 bytes of cryptographic
   randomness, expire after 10 minutes, are bound to the requesting user, and
   permit one successful download. Missing, invalid, expired, already claimed,
@@ -130,12 +162,18 @@ policies.
 
 ## Limitations and non-goals
 
-- Only one-to-one DM channels are supported. Group messages, public channels,
-  private channels, and self-DMs are rejected.
+- `/export-dm` supports only one-to-one DM channels. The disabled-by-default
+  `/export-channel` opt-in additionally supports the current public or private
+  channel. Group messages, archived channels, and self-DMs are rejected.
 - An export contains up to the configured limit of the newest non-deleted posts
   (1,000 by default and at most 10,000), retrieved using paginated channel
   history. There is no deleted-post recovery, retention override, or legal-hold
   behavior.
+- Mattermost 10.11.2 does not expose a reliable, generally applicable
+  "since this requester joined" history boundary for this export path. An
+  authorized current member can therefore export the configured latest-history
+  window, including posts from before they joined if those posts remain
+  visible through Mattermost's channel-history API.
 - Attachment metadata is included, but attachment bytes, previews, and
   download URLs are not.
 - Tokens and generated exports are process-local and memory-only. In a
