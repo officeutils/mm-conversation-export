@@ -13,6 +13,13 @@
         "type": "text",
         "help_text": "Maximum number of messages included in one export (1-10000).",
         "default": "1000"
+      },
+      {
+        "key": "EnableChannelExport",
+        "display_name": "Enable channel export",
+        "type": "bool",
+        "help_text": "Enable channel export functionality.",
+        "default": false
       }
     ]
   },
