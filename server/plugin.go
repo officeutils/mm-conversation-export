@@ -50,24 +50,30 @@ type fileInfoGetter interface {
 	GetFileInfo(fileID string) (*model.FileInfo, *model.AppError)
 }
 
+type configurationLoader interface {
+	LoadPluginConfiguration(dest any) error
+}
+
 // Plugin is the server-side DM export plugin.
 type Plugin struct {
 	plugin.MattermostPlugin
 
-	commandRegistrar commandRegistrar
-	userGetter       userGetter
-	channelGetter    channelGetter
-	memberGetter     channelMemberGetter
-	postGetter       channelPostGetter
-	fileGetter       fileInfoGetter
-	exportStore      temporaryExportStore
-	now              func() time.Time
-	configurationMu  sync.RWMutex
-	configuration    configuration
+	commandRegistrar    commandRegistrar
+	userGetter          userGetter
+	channelGetter       channelGetter
+	memberGetter        channelMemberGetter
+	postGetter          channelPostGetter
+	fileGetter          fileInfoGetter
+	configurationLoader configurationLoader
+	exportStore         temporaryExportStore
+	now                 func() time.Time
+	configurationMu     sync.RWMutex
+	configuration       configuration
 }
 
 type configuration struct {
-	MaxExportPosts string
+	MaxExportPosts      string
+	EnableChannelExport bool
 }
 
 func (p *Plugin) maxExportPosts() int {
@@ -95,7 +101,11 @@ func parseMaxExportPosts(value string) (int, error) {
 // OnConfigurationChange validates and applies System Console changes without a rebuild.
 func (p *Plugin) OnConfigurationChange() error {
 	var next configuration
-	if err := p.API.LoadPluginConfiguration(&next); err != nil {
+	loader := p.configurationLoader
+	if loader == nil {
+		loader = p.API
+	}
+	if err := loader.LoadPluginConfiguration(&next); err != nil {
 		return err
 	}
 	if next.MaxExportPosts == "" {
