@@ -18,6 +18,12 @@ func isExportChannelCommand(args *model.CommandArgs) bool {
 }
 
 func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.CommandResponse {
+	// Channel export is both opt-in and restricted to direct-message channels.
+	// Check the opt-in before performing any lookup so a disabled installation
+	// cannot disclose or read channel data through this command.
+	if !p.channelExportEnabled() {
+		return commandError("Channel export is disabled.")
+	}
 	if args.Command != "/"+channelCommandTrigger {
 		return commandError("Usage: /export-channel")
 	}
@@ -31,7 +37,7 @@ func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.Com
 	}
 	channel, appErr := channels.GetChannel(args.ChannelId)
 	if appErr != nil || channel == nil || channel.Id != args.ChannelId || channel.DeleteAt != 0 ||
-		(channel.Type != model.ChannelTypeOpen && channel.Type != model.ChannelTypePrivate) {
+		channel.Type != model.ChannelTypeDirect {
 		return commandError("Unable to export the current channel.")
 	}
 
@@ -41,6 +47,10 @@ func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.Com
 	}
 	member, appErr := members.GetChannelMember(channel.Id, args.UserId)
 	if appErr != nil || !isExpectedMember(member, channel.Id, args.UserId) {
+		return commandError("Unable to export the current channel.")
+	}
+	participants, appErr := members.GetChannelMembers(channel.Id, 0, 3)
+	if appErr != nil || !isTwoParticipantDirectChannel(participants, channel.Id, args.UserId) {
 		return commandError("Unable to export the current channel.")
 	}
 
@@ -93,6 +103,25 @@ func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.Com
 	}
 
 	return &model.CommandResponse{ResponseType: "ephemeral", Text: fmt.Sprintf("[Download your channel export](/plugins/%s/download?token=%s). This one-time link expires in 10 minutes.", pluginID, token)}
+}
+
+func isTwoParticipantDirectChannel(members model.ChannelMembers, channelID, requesterID string) bool {
+	if len(members) != 2 {
+		return false
+	}
+	seenRequester := false
+	seenUsers := make(map[string]struct{}, 2)
+	for _, member := range members {
+		if member.ChannelId != channelID || member.UserId == "" {
+			return false
+		}
+		if _, exists := seenUsers[member.UserId]; exists {
+			return false
+		}
+		seenUsers[member.UserId] = struct{}{}
+		seenRequester = seenRequester || member.UserId == requesterID
+	}
+	return seenRequester
 }
 
 func resolvePostAuthors(users userGetter, posts []*model.Post) map[string]string {

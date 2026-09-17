@@ -101,6 +101,12 @@ func (p *Plugin) maxExportPosts() int {
 	return limit
 }
 
+func (p *Plugin) channelExportEnabled() bool {
+	p.configurationMu.RLock()
+	defer p.configurationMu.RUnlock()
+	return p.configuration.EnableChannelExport
+}
+
 func parseMaxExportPosts(value string) (int, error) {
 	limit, err := strconv.Atoi(value)
 	if err != nil || limit <= 0 || limit > maxExportPostsSafety {

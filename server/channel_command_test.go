@@ -23,8 +23,9 @@ func (g *recordingCurrentChannelGetter) GetChannel(channelID string) (*model.Cha
 }
 
 func TestExportChannelCommandAcceptsExactCommandAndCurrentContext(t *testing.T) {
-	channels := &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: model.ChannelTypeOpen}}
+	channels := &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: model.ChannelTypeDirect}}
 	response, appErr := (&Plugin{
+		configuration:        configuration{EnableChannelExport: true},
 		currentChannelGetter: channels,
 		memberGetter:         validChannelCommandMemberGetter(),
 		permissionChecker:    &recordingChannelPermissionChecker{allowed: true},
@@ -48,6 +49,57 @@ func TestExportChannelCommandAcceptsExactCommandAndCurrentContext(t *testing.T) 
 	}
 }
 
+func TestExportChannelCommandRejectsDisabledFeatureBeforeChannelLookup(t *testing.T) {
+	channels := &recordingCurrentChannelGetter{}
+	response, appErr := (&Plugin{currentChannelGetter: channels}).ExecuteCommand(nil, channelCommandArgs())
+	if appErr != nil {
+		t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
+	}
+	if response == nil || response.Text != "Channel export is disabled." {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+	if channels.calls != 0 {
+		t.Errorf("GetChannel called %d times, want 0", channels.calls)
+	}
+}
+
+func TestExportChannelCommandRequiresExactlyTwoDirectParticipants(t *testing.T) {
+	tests := []struct {
+		name    string
+		members model.ChannelMembers
+	}{
+		{name: "requester only", members: model.ChannelMembers{{ChannelId: "channel-id", UserId: "requester-id"}}},
+		{name: "three participants", members: model.ChannelMembers{{ChannelId: "channel-id", UserId: "requester-id"}, {ChannelId: "channel-id", UserId: "target-id"}, {ChannelId: "channel-id", UserId: "third-id"}}},
+		{name: "requester absent", members: model.ChannelMembers{{ChannelId: "channel-id", UserId: "first-id"}, {ChannelId: "channel-id", UserId: "second-id"}}},
+		{name: "duplicate participant", members: model.ChannelMembers{{ChannelId: "channel-id", UserId: "requester-id"}, {ChannelId: "channel-id", UserId: "requester-id"}}},
+		{name: "wrong channel", members: model.ChannelMembers{{ChannelId: "channel-id", UserId: "requester-id"}, {ChannelId: "other-channel", UserId: "target-id"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			members := validChannelCommandMemberGetter()
+			members.allMembers = tt.members
+			posts := validPostGetter()
+			response, appErr := (&Plugin{
+				configuration:        configuration{EnableChannelExport: true},
+				currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: model.ChannelTypeDirect}},
+				memberGetter:         members,
+				permissionChecker:    &recordingChannelPermissionChecker{allowed: true},
+				postGetter:           posts,
+			}).ExecuteCommand(nil, channelCommandArgs())
+			if appErr != nil {
+				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
+			}
+			if response.Text != "Unable to export the current channel." {
+				t.Errorf("response text = %q", response.Text)
+			}
+			if posts.calls != 0 {
+				t.Errorf("GetPostsForChannel calls = %d, want 0", posts.calls)
+			}
+		})
+	}
+}
+
 func TestExportChannelCommandRejectsInvalidParsingAndContextWithoutLookup(t *testing.T) {
 	tests := []struct {
 		name string
@@ -62,7 +114,7 @@ func TestExportChannelCommandRejectsInvalidParsingAndContextWithoutLookup(t *tes
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			channels := &recordingCurrentChannelGetter{}
-			response, appErr := (&Plugin{currentChannelGetter: channels}).ExecuteCommand(nil, tt.args)
+			response, appErr := (&Plugin{configuration: configuration{EnableChannelExport: true}, currentChannelGetter: channels}).ExecuteCommand(nil, tt.args)
 			if appErr != nil {
 				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
 			}
@@ -95,16 +147,16 @@ func TestExportChannelCommandRejectsLookupAndIdentityFailures(t *testing.T) {
 	}
 }
 
-func TestExportChannelCommandAllowsOnlyActiveOpenOrPrivateChannels(t *testing.T) {
+func TestExportChannelCommandAllowsOnlyActiveDirectChannels(t *testing.T) {
 	tests := []struct {
 		name    string
 		type_   model.ChannelType
 		deleted bool
 		wantOK  bool
 	}{
-		{name: "open", type_: model.ChannelTypeOpen, wantOK: true},
-		{name: "private", type_: model.ChannelTypePrivate, wantOK: true},
-		{name: "direct", type_: model.ChannelTypeDirect},
+		{name: "open", type_: model.ChannelTypeOpen},
+		{name: "private", type_: model.ChannelTypePrivate},
+		{name: "direct", type_: model.ChannelTypeDirect, wantOK: true},
 		{name: "group", type_: model.ChannelTypeGroup},
 		{name: "unknown", type_: model.ChannelType("x")},
 		{name: "archived open", type_: model.ChannelTypeOpen, deleted: true},
@@ -127,12 +179,13 @@ func TestExportChannelCommandAllowsOnlyActiveOpenOrPrivateChannels(t *testing.T)
 	}
 }
 
-func TestExportChannelCommandAuthorizesMembersWithReadPermission(t *testing.T) {
-	for _, channelType := range []model.ChannelType{model.ChannelTypeOpen, model.ChannelTypePrivate} {
+func TestExportChannelCommandAuthorizesDirectMembersWithReadPermission(t *testing.T) {
+	for _, channelType := range []model.ChannelType{model.ChannelTypeDirect} {
 		t.Run(string(channelType), func(t *testing.T) {
 			members := validChannelCommandMemberGetter()
 			permissions := &recordingChannelPermissionChecker{allowed: true}
 			response, appErr := (&Plugin{
+				configuration:        configuration{EnableChannelExport: true},
 				currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: channelType}},
 				memberGetter:         members,
 				permissionChecker:    permissions,
@@ -152,8 +205,8 @@ func TestExportChannelCommandAuthorizesMembersWithReadPermission(t *testing.T) {
 			if len(members.memberChannelIDs) != 1 || members.memberChannelIDs[0] != "channel-id" {
 				t.Errorf("GetChannelMember channel IDs = %v, want [channel-id]", members.memberChannelIDs)
 			}
-			if members.channelID != "" {
-				t.Errorf("GetChannelMembers was called for %q", members.channelID)
+			if members.channelID != "channel-id" || members.page != 0 || members.perPage != 3 {
+				t.Errorf("GetChannelMembers args = (%q, %d, %d), want (channel-id, 0, 3)", members.channelID, members.page, members.perPage)
 			}
 			if permissions.calls != 1 || permissions.userID != "requester-id" || permissions.channelID != "channel-id" || permissions.permission != model.PermissionReadChannel {
 				t.Errorf("HasPermissionToChannel calls/args = %d, %q, %q, %v", permissions.calls, permissions.userID, permissions.channelID, permissions.permission)
@@ -173,15 +226,13 @@ func TestExportChannelCommandRejectsFailedAuthorizationBeforeContentAccess(t *te
 		permissionAllowed  bool
 		wantPermissionCall bool
 	}{
-		{name: "absent membership in private channel", channelType: model.ChannelTypePrivate, memberErr: notFoundError, permissionAllowed: true},
-		{name: "failed membership lookup", channelType: model.ChannelTypePrivate, memberErr: lookupError, permissionAllowed: true},
-		{name: "nil membership in public channel", channelType: model.ChannelTypeOpen, permissionAllowed: true},
-		{name: "membership has mismatched channel", channelType: model.ChannelTypeOpen, member: &model.ChannelMember{ChannelId: "other-channel", UserId: "requester-id"}, permissionAllowed: true},
-		{name: "membership has mismatched user", channelType: model.ChannelTypePrivate, member: &model.ChannelMember{ChannelId: "channel-id", UserId: "other-user"}, permissionAllowed: true},
-		{name: "read permission denied", channelType: model.ChannelTypePrivate, member: &model.ChannelMember{ChannelId: "channel-id", UserId: "requester-id"}, wantPermissionCall: true},
-		{name: "administrator without membership", channelType: model.ChannelTypePrivate, permissionAllowed: true},
-		{name: "guest cannot rely on public channel visibility", channelType: model.ChannelTypeOpen, permissionAllowed: true},
-		{name: "guest public member denied read permission", channelType: model.ChannelTypeOpen, member: &model.ChannelMember{ChannelId: "channel-id", UserId: "requester-id"}, wantPermissionCall: true},
+		{name: "absent membership", channelType: model.ChannelTypeDirect, memberErr: notFoundError, permissionAllowed: true},
+		{name: "failed membership lookup", channelType: model.ChannelTypeDirect, memberErr: lookupError, permissionAllowed: true},
+		{name: "nil membership", channelType: model.ChannelTypeDirect, permissionAllowed: true},
+		{name: "membership has mismatched channel", channelType: model.ChannelTypeDirect, member: &model.ChannelMember{ChannelId: "other-channel", UserId: "requester-id"}, permissionAllowed: true},
+		{name: "membership has mismatched user", channelType: model.ChannelTypeDirect, member: &model.ChannelMember{ChannelId: "channel-id", UserId: "other-user"}, permissionAllowed: true},
+		{name: "read permission denied", channelType: model.ChannelTypeDirect, member: &model.ChannelMember{ChannelId: "channel-id", UserId: "requester-id"}, wantPermissionCall: true},
+		{name: "administrator without membership", channelType: model.ChannelTypeDirect, permissionAllowed: true},
 	}
 
 	for _, tt := range tests {
@@ -190,15 +241,18 @@ func TestExportChannelCommandRejectsFailedAuthorizationBeforeContentAccess(t *te
 				members:      map[string]*model.ChannelMember{"requester-id": tt.member},
 				memberErrors: map[string]*model.AppError{"requester-id": tt.memberErr},
 			}
+			if tt.member != nil && tt.member.ChannelId == "channel-id" && tt.member.UserId == "requester-id" {
+				members.allMembers = validChannelCommandMemberGetter().allMembers
+			}
 			permissions := &recordingChannelPermissionChecker{allowed: tt.permissionAllowed}
 			posts := validPostGetter()
 			files := &recordingFileInfoGetter{}
 			response, appErr := (&Plugin{
-				currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: tt.channelType}},
-				memberGetter:         members,
-				permissionChecker:    permissions,
-				postGetter:           posts,
-				fileGetter:           files,
+				configuration: configuration{EnableChannelExport: true}, currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: tt.channelType}},
+				memberGetter:      members,
+				permissionChecker: permissions,
+				postGetter:        posts,
+				fileGetter:        files,
 			}).ExecuteCommand(nil, channelCommandArgs())
 			if appErr != nil {
 				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
@@ -212,9 +266,6 @@ func TestExportChannelCommandRejectsFailedAuthorizationBeforeContentAccess(t *te
 			}
 			if permissions.calls != wantPermissionCalls {
 				t.Errorf("HasPermissionToChannel calls = %d, want %d", permissions.calls, wantPermissionCalls)
-			}
-			if members.channelID != "" {
-				t.Errorf("GetChannelMembers was called for %q", members.channelID)
 			}
 			if posts.calls != 0 {
 				t.Errorf("GetPostsForChannel calls = %d, want 0", posts.calls)
@@ -237,6 +288,7 @@ func assertChannelCommandRejected(t *testing.T, channels *recordingCurrentChanne
 func executeChannelCommand(t *testing.T, channels *recordingCurrentChannelGetter) *model.CommandResponse {
 	t.Helper()
 	response, appErr := (&Plugin{
+		configuration:        configuration{EnableChannelExport: true},
 		currentChannelGetter: channels,
 		memberGetter:         validChannelCommandMemberGetter(),
 		permissionChecker:    &recordingChannelPermissionChecker{allowed: true},
@@ -286,7 +338,8 @@ func TestExportChannelReusesPaginationLimitAttachmentsAndAuthorResolution(t *tes
 	}, errs: map[string]*model.AppError{}}
 	store := validExportStore()
 	p := &Plugin{
-		currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Name: "town-square", DisplayName: "Town Square", Type: model.ChannelTypeOpen}},
+		configuration:        configuration{EnableChannelExport: true},
+		currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Name: "town-square", DisplayName: "Town Square", Type: model.ChannelTypeDirect}},
 		memberGetter:         validChannelCommandMemberGetter(), permissionChecker: &recordingChannelPermissionChecker{allowed: true},
 		postGetter: posts, fileGetter: files, userGetter: users, exportStore: store,
 		now: func() time.Time { return time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC) },
@@ -325,7 +378,7 @@ func TestExportChannelUsesSafeFallbackAuthorLabelsAndKeepsReplies(t *testing.T) 
 	}}
 	users := &channelAuthorGetter{users: map[string]*model.User{"known-user": {Id: "known-user", Username: "known"}}, errs: map[string]*model.AppError{"missing-user": model.NewAppError("test", "gone", nil, "", 404)}}
 	store := validExportStore()
-	p := &Plugin{currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Name: "channel", Type: model.ChannelTypePrivate}}, memberGetter: validChannelCommandMemberGetter(), permissionChecker: &recordingChannelPermissionChecker{allowed: true}, postGetter: &recordingPostGetter{postList: list}, fileGetter: &recordingFileInfoGetter{}, userGetter: users, exportStore: store}
+	p := &Plugin{configuration: configuration{EnableChannelExport: true}, currentChannelGetter: &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Name: "channel", Type: model.ChannelTypeDirect}}, memberGetter: validChannelCommandMemberGetter(), permissionChecker: &recordingChannelPermissionChecker{allowed: true}, postGetter: &recordingPostGetter{postList: list}, fileGetter: &recordingFileInfoGetter{}, userGetter: users, exportStore: store}
 	p.ExecuteCommand(nil, channelCommandArgs())
 	html := string(store.contents)
 	for _, want := range []string{"@known", "Unknown user", "System", "root body", "reply body"} {
@@ -340,11 +393,14 @@ func TestExportChannelUsesSafeFallbackAuthorLabelsAndKeepsReplies(t *testing.T) 
 }
 
 func validChannelCommandMemberGetter() *memberLookup {
+	requester := model.ChannelMember{ChannelId: "channel-id", UserId: "requester-id"}
+	target := model.ChannelMember{ChannelId: "channel-id", UserId: "target-id"}
 	return &memberLookup{
 		members: map[string]*model.ChannelMember{
-			"requester-id": {ChannelId: "channel-id", UserId: "requester-id"},
+			"requester-id": &requester,
 		},
 		memberErrors: map[string]*model.AppError{},
+		allMembers:   model.ChannelMembers{requester, target},
 	}
 }
 
