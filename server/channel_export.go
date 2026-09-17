@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -140,14 +139,4 @@ func resolvePostAuthors(users userGetter, posts []*model.Post) map[string]string
 		}
 	}
 	return authors
-}
-
-var unsafeChannelFilenameCharacters = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
-
-func channelExportFilename(name string, exportedAt time.Time) string {
-	name = strings.Trim(unsafeChannelFilenameCharacters.ReplaceAllString(name, "-"), ".-_")
-	if name == "" {
-		name = "channel"
-	}
-	return fmt.Sprintf("channel-%s-%s.html", name, exportedAt.UTC().Format("2006-01-02-150405"))
 }
