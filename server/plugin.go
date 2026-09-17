@@ -101,6 +101,12 @@ func (p *Plugin) maxExportPosts() int {
 	return limit
 }
 
+func (p *Plugin) channelExportEnabled() bool {
+	p.configurationMu.RLock()
+	defer p.configurationMu.RUnlock()
+	return p.configuration.EnableChannelExport
+}
+
 func parseMaxExportPosts(value string) (int, error) {
 	limit, err := strconv.Atoi(value)
 	if err != nil || limit <= 0 || limit > maxExportPostsSafety {
@@ -316,55 +322,6 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		ResponseType: "ephemeral",
 		Text:         fmt.Sprintf("[Download your direct-message export with @%s](%s). This one-time link expires in 10 minutes.", username, downloadURL),
 	}, nil
-}
-
-func isExportChannelCommand(args *model.CommandArgs) bool {
-	if args == nil {
-		return false
-	}
-	fields := strings.Fields(args.Command)
-	return len(fields) > 0 && fields[0] == "/"+channelCommandTrigger
-}
-
-func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.CommandResponse {
-	if args.Command != "/"+channelCommandTrigger {
-		return commandError("Usage: /export-channel")
-	}
-	if args.UserId == "" || args.ChannelId == "" {
-		return commandError("Unable to export the current channel.")
-	}
-
-	channels := p.currentChannelGetter
-	if channels == nil {
-		channels = p.API
-	}
-	channel, appErr := channels.GetChannel(args.ChannelId)
-	if appErr != nil || channel == nil || channel.Id != args.ChannelId || channel.DeleteAt != 0 ||
-		(channel.Type != model.ChannelTypeOpen && channel.Type != model.ChannelTypePrivate) {
-		return commandError("Unable to export the current channel.")
-	}
-
-	members := p.memberGetter
-	if members == nil {
-		members = p.API
-	}
-	member, appErr := members.GetChannelMember(channel.Id, args.UserId)
-	if appErr != nil || !isExpectedMember(member, channel.Id, args.UserId) {
-		return commandError("Unable to export the current channel.")
-	}
-
-	permissions := p.permissionChecker
-	if permissions == nil {
-		permissions = p.API
-	}
-	if !permissions.HasPermissionToChannel(args.UserId, channel.Id, model.PermissionReadChannel) {
-		return commandError("Unable to export the current channel.")
-	}
-
-	return &model.CommandResponse{
-		ResponseType: "ephemeral",
-		Text:         "The current channel is eligible for export.",
-	}
 }
 
 func getSortedChannelPosts(posts channelPostGetter, channelID string, limit int) ([]*model.Post, *model.AppError) {

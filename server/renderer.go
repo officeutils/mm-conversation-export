@@ -87,10 +87,32 @@ func renderHTMLExport(requester, target *model.User, _ time.Time, maxPosts int, 
 		}
 	}
 
+	return renderConversationHTML("Direct messages: "+participants[0]+" and "+participants[1], authors, func(post *model.Post) string {
+		return post.UserId
+	}, maxPosts, posts, attachmentsByPost)
+}
+
+func renderChannelHTMLExport(channel *model.Channel, authors map[string]string, maxPosts int, posts []*model.Post, attachmentsByPost map[string][]AttachmentMetadata) ([]byte, error) {
+	name := channel.DisplayName
+	if name == "" {
+		name = channel.Name
+	}
+	if name == "" {
+		name = "Unnamed channel"
+	}
+	return renderConversationHTML("Channel: "+name, authors, func(post *model.Post) string {
+		if post.UserId == "" {
+			return "System"
+		}
+		return "Unknown user"
+	}, maxPosts, posts, attachmentsByPost)
+}
+
+func renderConversationHTML(title string, authors map[string]string, fallbackAuthor func(*model.Post) string, maxPosts int, posts []*model.Post, attachmentsByPost map[string][]AttachmentMetadata) ([]byte, error) {
 	messageFor := func(post *model.Post) exportMessage {
 		author := authors[post.UserId]
 		if author == "" {
-			author = post.UserId
+			author = fallbackAuthor(post)
 		}
 		attachments := make([]string, 0, len(attachmentsByPost[post.Id]))
 		for _, attachment := range attachmentsByPost[post.Id] {
@@ -155,7 +177,7 @@ func renderHTMLExport(requester, target *model.User, _ time.Time, maxPosts int, 
 	})
 
 	data := exportTemplateData{
-		Title:   "Direct messages: " + participants[0] + " and " + participants[1],
+		Title:   title,
 		Threads: threads,
 		Notice:  fmt.Sprintf("Exported %d messages. Configured limit: %d.", len(posts), maxPosts),
 	}
