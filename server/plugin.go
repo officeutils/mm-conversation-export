@@ -16,6 +16,7 @@ import (
 
 const (
 	commandTrigger        = "export-dm"
+	channelCommandTrigger = "export-channel"
 	pluginID              = "com.github.officeutils.dm-export"
 	defaultMaxExportPosts = 1000
 	maxExportPostsSafety  = 10000
@@ -35,6 +36,10 @@ type userGetter interface {
 
 type channelGetter interface {
 	GetChannelsForTeamForUser(teamID, userID string, includeDeleted bool) ([]*model.Channel, *model.AppError)
+}
+
+type currentChannelGetter interface {
+	GetChannel(channelID string) (*model.Channel, *model.AppError)
 }
 
 type channelMemberGetter interface {
@@ -58,17 +63,18 @@ type configurationLoader interface {
 type Plugin struct {
 	plugin.MattermostPlugin
 
-	commandRegistrar    commandRegistrar
-	userGetter          userGetter
-	channelGetter       channelGetter
-	memberGetter        channelMemberGetter
-	postGetter          channelPostGetter
-	fileGetter          fileInfoGetter
-	configurationLoader configurationLoader
-	exportStore         temporaryExportStore
-	now                 func() time.Time
-	configurationMu     sync.RWMutex
-	configuration       configuration
+	commandRegistrar     commandRegistrar
+	userGetter           userGetter
+	channelGetter        channelGetter
+	currentChannelGetter currentChannelGetter
+	memberGetter         channelMemberGetter
+	postGetter           channelPostGetter
+	fileGetter           fileInfoGetter
+	configurationLoader  configurationLoader
+	exportStore          temporaryExportStore
+	now                  func() time.Time
+	configurationMu      sync.RWMutex
+	configuration        configuration
 }
 
 type configuration struct {
@@ -131,11 +137,19 @@ func (p *Plugin) OnActivate() error {
 		registrar = p.API
 	}
 
-	return registrar.RegisterCommand(&model.Command{
+	if err := registrar.RegisterCommand(&model.Command{
 		Trigger:          commandTrigger,
 		AutoComplete:     true,
 		AutoCompleteDesc: "Export a direct-message conversation",
 		AutoCompleteHint: "@username",
+	}); err != nil {
+		return err
+	}
+
+	return registrar.RegisterCommand(&model.Command{
+		Trigger:          channelCommandTrigger,
+		AutoComplete:     true,
+		AutoCompleteDesc: "Export the current public or private channel",
 	})
 }
 
@@ -198,6 +212,10 @@ func setDownloadResponseHeaders(header http.Header) {
 // ExecuteCommand validates an export request and locates its existing direct
 // channel. Mattermost supplies UserId from the authenticated command request.
 func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
+	if isExportChannelCommand(args) {
+		return p.executeExportChannelCommand(args), nil
+	}
+
 	if args == nil || args.UserId == "" {
 		return commandError("Unable to export direct messages without an authenticated requester."), nil
 	}
@@ -293,6 +311,38 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 		ResponseType: "ephemeral",
 		Text:         fmt.Sprintf("[Download your direct-message export with @%s](%s). This one-time link expires in 10 minutes.", username, downloadURL),
 	}, nil
+}
+
+func isExportChannelCommand(args *model.CommandArgs) bool {
+	if args == nil {
+		return false
+	}
+	fields := strings.Fields(args.Command)
+	return len(fields) > 0 && fields[0] == "/"+channelCommandTrigger
+}
+
+func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.CommandResponse {
+	if args.Command != "/"+channelCommandTrigger {
+		return commandError("Usage: /export-channel")
+	}
+	if args.UserId == "" || args.ChannelId == "" {
+		return commandError("Unable to export the current channel.")
+	}
+
+	channels := p.currentChannelGetter
+	if channels == nil {
+		channels = p.API
+	}
+	channel, appErr := channels.GetChannel(args.ChannelId)
+	if appErr != nil || channel == nil || channel.Id != args.ChannelId || channel.DeleteAt != 0 ||
+		(channel.Type != model.ChannelTypeOpen && channel.Type != model.ChannelTypePrivate) {
+		return commandError("Unable to export the current channel.")
+	}
+
+	return &model.CommandResponse{
+		ResponseType: "ephemeral",
+		Text:         "The current channel is eligible for export.",
+	}
 }
 
 func getSortedChannelPosts(posts channelPostGetter, channelID string, limit int) ([]*model.Post, *model.AppError) {
