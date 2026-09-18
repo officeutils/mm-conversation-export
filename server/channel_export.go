@@ -25,7 +25,9 @@ func (p *Plugin) executeExportChannelCommand(args *model.CommandArgs) *model.Com
 		return commandError("Channel export is disabled.")
 	}
 	fields := strings.Fields(args.Command)
-	if len(fields) != 1 || fields[0] != "/"+channelCommandTrigger {
+	// Dispatch already established that the first field is this command's
+	// trigger. Only additional fields are caller-supplied arguments.
+	if len(fields) > 1 {
 		return commandError("Usage: /export-channel")
 	}
 	if args.UserId == "" || args.ChannelId == "" {

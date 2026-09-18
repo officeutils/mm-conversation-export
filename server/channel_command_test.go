@@ -44,6 +44,9 @@ func TestExportChannelCommandAcceptsExactCommandAndCurrentContext(t *testing.T) 
 	if response == nil || response.ResponseType != "ephemeral" || response.Text == "" {
 		t.Fatalf("unexpected response: %#v", response)
 	}
+	if response.Text == "Usage: /export-channel" {
+		t.Fatalf("exact zero-argument command returned usage: %#v", response)
+	}
 	if channels.calls != 1 || channels.requestedChannelID != "channel-id" {
 		t.Errorf("GetChannel calls = %d with %q, want 1 with channel-id", channels.calls, channels.requestedChannelID)
 	}
@@ -173,6 +176,9 @@ func TestExportChannelCommandRejectsInvalidParsingAndContextWithoutLookup(t *tes
 			}
 			if response == nil || response.ResponseType != "ephemeral" || response.Text == "" {
 				t.Fatalf("unexpected response: %#v", response)
+			}
+			if tt.name == "argument" && response.Text != "Usage: /export-channel" {
+				t.Errorf("response text = %q, want usage", response.Text)
 			}
 			if channels.calls != 0 {
 				t.Errorf("GetChannel called %d times, want 0", channels.calls)
