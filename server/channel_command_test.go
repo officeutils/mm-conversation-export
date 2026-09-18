@@ -49,6 +49,60 @@ func TestExportChannelCommandAcceptsExactCommandAndCurrentContext(t *testing.T) 
 	}
 }
 
+func TestExportChannelCommandAcceptsWhitespaceNormalizedCommandAndCurrentContext(t *testing.T) {
+	for _, command := range []string{" /export-channel", "/export-channel ", "\t/export-channel\n"} {
+		t.Run(command, func(t *testing.T) {
+			channels := &recordingCurrentChannelGetter{channel: &model.Channel{Id: "channel-id", Type: model.ChannelTypeDirect}}
+			response, appErr := (&Plugin{
+				configuration:        configuration{EnableChannelExport: true},
+				currentChannelGetter: channels,
+				memberGetter:         validChannelCommandMemberGetter(),
+				permissionChecker:    &recordingChannelPermissionChecker{allowed: true},
+				postGetter:           validPostGetter(),
+				fileGetter:           &recordingFileInfoGetter{},
+				exportStore:          validExportStore(),
+			}).ExecuteCommand(nil, &model.CommandArgs{
+				Command:   command,
+				UserId:    "requester-id",
+				ChannelId: "channel-id",
+			})
+
+			if appErr != nil {
+				t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
+			}
+			if response == nil || response.Text == "Usage: /export-channel" || !strings.HasPrefix(response.Text, "[Download your channel export]") {
+				t.Fatalf("unexpected response: %#v", response)
+			}
+			if channels.calls != 1 || channels.requestedChannelID != "channel-id" {
+				t.Errorf("GetChannel calls = %d with %q, want 1 with CommandArgs.ChannelId", channels.calls, channels.requestedChannelID)
+			}
+		})
+	}
+}
+
+func TestExportDMCommandStillUsesDMPath(t *testing.T) {
+	currentChannel := &recordingCurrentChannelGetter{}
+	response, appErr := (&Plugin{
+		configuration:        configuration{EnableChannelExport: true},
+		currentChannelGetter: currentChannel,
+		userGetter:           validUserGetter(),
+		channelGetter:        validChannelGetter(),
+		memberGetter:         validMemberGetter(),
+		postGetter:           validPostGetter(),
+		exportStore:          validExportStore(),
+	}).ExecuteCommand(nil, &model.CommandArgs{Command: "/export-dm @other", UserId: "requester-id", ChannelId: "channel-id"})
+
+	if appErr != nil {
+		t.Fatalf("ExecuteCommand returned an AppError: %v", appErr)
+	}
+	if response == nil || !strings.HasPrefix(response.Text, "[Download your direct-message export with @other]") {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+	if currentChannel.calls != 0 {
+		t.Errorf("current-channel GetChannel called %d times, want 0", currentChannel.calls)
+	}
+}
+
 func TestExportChannelCommandRejectsDisabledFeatureBeforeChannelLookup(t *testing.T) {
 	channels := &recordingCurrentChannelGetter{}
 	response, appErr := (&Plugin{currentChannelGetter: channels}).ExecuteCommand(nil, channelCommandArgs())
@@ -106,7 +160,6 @@ func TestExportChannelCommandRejectsInvalidParsingAndContextWithoutLookup(t *tes
 		args *model.CommandArgs
 	}{
 		{name: "argument", args: &model.CommandArgs{Command: "/export-channel extra", UserId: "requester-id", ChannelId: "channel-id"}},
-		{name: "trailing whitespace", args: &model.CommandArgs{Command: "/export-channel ", UserId: "requester-id", ChannelId: "channel-id"}},
 		{name: "missing user", args: &model.CommandArgs{Command: "/export-channel", ChannelId: "channel-id"}},
 		{name: "missing channel", args: &model.CommandArgs{Command: "/export-channel", UserId: "requester-id"}},
 	}
